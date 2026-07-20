@@ -1,0 +1,80 @@
+dataset:
+  label_col: Class
+  name: CreditCard2023
+  path: data/raw/creditcard_2023_fast.csv
+  random_state: 42
+  sample_frac: 1.0
+  time_col: id
+  time_unit: index
+experiment:
+  ablation: baseline
+  dataset: creditcard
+  name: creditcard2023_baseline_seed42
+  pipeline: fraudgnn_rl
+  seed: 42
+federated:
+  aggregation: fedavg
+  batch_size: 64
+  learning_rate: 0.001
+  local_epochs: 5
+  num_clients: 3
+  rounds: 10
+flags:
+  hard_edges: true
+  hybrid_graph: false
+  pruning: false
+  soft_edges: false
+  weighted_fusion: false
+graph:
+  add_self_loops: true
+  max_neighbors_per_node: 3
+  similarity_threshold: 0.98
+  time_window_hours: 1000.0
+  type: transaction_similarity
+model:
+  dropout: 0.2
+  hidden_dim: 64
+  num_layers: 3
+  num_node_types: 1
+preprocess:
+  categorical_cols: []
+  drop_cols:
+  - id
+  numeric_strategy: median
+rl:
+  batch_size: 256
+  enabled: true
+  epochs: 30
+  fpr_penalty: 0.5
+  threshold_bins:
+  - 0.1
+  - 0.15
+  - 0.2
+  - 0.25
+  - 0.3
+  - 0.35
+  - 0.4
+  - 0.45
+  - 0.5
+split:
+  strategy: stratified_random
+  train_ratio: 0.7
+  val_ratio: 0.15
+threshold_selection:
+  f1_weight: 1.0
+  fpr_weight: 0.5
+  max_fpr: 0.2
+  metric: custom
+  min_recall: 0.3
+  precision_weight: 0.1
+  recall_weight: 0.8
+timing:
+  latency_runs: 50
+  log_memory: true
+  measure_latency: true
+train:
+  batch_size: 64
+  epochs: 30
+  learning_rate: 0.001
+  patience: 10
+  weight_decay: 0.0001

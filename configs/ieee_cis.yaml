@@ -1,0 +1,154 @@
+# ============================================================
+# CONFIG: IEEE-CIS - FULL BASELINE REPRODUCTION
+# ============================================================
+
+flags:
+  hard_edges: true
+  soft_edges: false
+  hybrid_graph: false
+  weighted_fusion: false
+  federated: true
+  dqn: true
+  pruning: false
+
+experiment:
+  name: ieee_baseline_full
+  pipeline: fraudgnn_rl
+  dataset: ieee
+
+dataset:
+  name: IEEE-CIS
+  path: data/raw/ieee_cis_fast.csv
+  label_col: isFraud
+  time_col: time_idx
+  time_unit: index
+  sample_frac: 1.0
+  random_state: 42
+
+split:
+  strategy: stratified_random
+  train_ratio: 0.70
+  val_ratio: 0.15
+
+preprocess:
+  drop_cols:
+    - time_idx
+    - TransactionID
+    - TransactionDT
+    - card1
+    - card2
+    - card3
+    - card4
+    - card5
+    - card6
+    - addr1
+    - addr2
+    - P_emaildomain
+    - R_emaildomain
+    - id_01
+    - id_02
+    - id_03
+    - id_04
+    - id_05
+    - id_06
+    - id_07
+    - id_08
+    - id_09
+    - id_10
+    - id_11
+    - id_12
+    - id_13
+    - id_14
+    - id_15
+    - id_16
+    - id_17
+    - id_18
+    - id_19
+    - id_20
+    - id_21
+    - id_22
+    - id_23
+    - id_24
+    - id_25
+    - id_26
+    - id_27
+    - id_28
+    - id_29
+    - id_30
+    - id_31
+    - id_32
+    - id_33
+    - id_34
+    - id_35
+    - id_36
+    - id_37
+    - id_38
+    - id_39
+    - id_40
+    - id_41
+    - id_42
+    - id_43
+    - id_44
+    - id_45
+    - id_46
+    - id_47
+    - id_48
+    - id_49
+    - id_50
+    - M1
+    - M2
+    - M3
+    - M4
+    - M5
+    - M6
+    - M7
+    - M8
+    - M9
+  categorical_cols:
+    - ProductCD
+  numeric_strategy: median
+  categorical_strategy: unknown
+
+graph:
+  type: transaction_similarity
+  time_window_hours: 50.0
+  similarity_threshold: 0.99
+  max_neighbors_per_node: 3
+  add_self_loops: true
+
+model:
+  hidden_dim: 64
+  num_layers: 3
+  dropout: 0.20
+  num_node_types: 1
+
+train:
+  epochs: 30
+  patience: 10
+  batch_size: 64
+  learning_rate: 0.001
+  weight_decay: 0.0001
+
+rl:
+  enabled: true
+  threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60]
+  fpr_penalty: 0.3
+  epochs: 30
+  batch_size: 256
+
+federated:
+  num_clients: 3
+  rounds: 10
+  local_epochs: 5
+  learning_rate: 0.001
+  batch_size: 64
+  aggregation: fedavg
+
+threshold_selection:
+  metric: custom
+  f1_weight: 1.0
+  recall_weight: 0.8
+  precision_weight: 0.1
+  fpr_weight: 0.5
+  max_fpr: 0.20
+  min_recall: 0.30

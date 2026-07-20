@@ -1,0 +1,22 @@
+# 1. Chặn toàn bộ môi trường ảo Python
+venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# 2. Chặn toàn bộ dữ liệu nặng (Các bộ dataset CSV của IEEE-CIS, Credit Card, Paysim)
+data/graphs/
+data/processed/
+data/raw/
+*.csv
+*.xlsx
+
+# 3. Chặn các file kết quả đầu ra, checkpoint mô hình và file log rác
+outputs/checkpoints/
+outputs/figures/
+outputs/logs/
+outputs/results/
+*.pt
+*.pth
+*.pkl
+*.log

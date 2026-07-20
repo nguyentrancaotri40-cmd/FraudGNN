@@ -1,0 +1,43 @@
+Raw Transaction Data
+        ↓
+Data Preprocessing
+        ↓
+Transaction Graph Construction
+        ↓
+(TSSGC Encoder)
+   ├── Temporal Modeling
+   ├── Spatial Modeling
+   └── Semantic Modeling
+        ↓
+Graph Embedding / Fraud Representation
+        ↓
+RL Agent (DQN / NAF)
+        ↓
+Threshold & Feature Weight Adjustment
+        ↓
+Fraud Classification
+        ↓
+Fraud / Legitimate Prediction
+        ↓
+Evaluation Metrics
+
+
+
+
+Luồng xứ lý code:
+
+raw data
+↓
+src/data/preprocess.py
+↓
+src/graph/build_graph.py
+↓
+src/models/tssgc.py
+↓
+src/models/dqn_agent.py
+↓
+src/models/fraudgnn_rl.py
+↓
+src/train/trainer.py
+↓
+src/eval/evaluate.py
