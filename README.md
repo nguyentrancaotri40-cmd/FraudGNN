@@ -1,4 +1,4 @@
-<h1 style="color: #2c974b;"> FraudGNN-RL Reproduction Project</h1>
+# FraudGNN-RL Reproduction Project
 
 Project này dựng lại pipeline **FraudGNN-RL** dựa trên mô tả trong paper:
 
@@ -7,12 +7,11 @@ Project này dựng lại pipeline **FraudGNN-RL** dựa trên mô tả trong pa
 
 ---
 
-
-<h2 style="color: #2c974b;"> Lưu ý khoa học quan trọng</h2>
+# Lưu ý khoa học quan trọng
 
 Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy project này là bản **reproduction from paper description**, tức là tái hiện gần nhất có thể theo thuật toán và thông số được mô tả, không thể cam kết giống 100% với mã nguồn nội bộ của tác giả.
 
-<h3 style="color: #2c974b;">Các điểm bám sát paper:</h3>
+## Các điểm bám sát paper
 
 - Dữ liệu giao dịch được biến thành **transaction graph** (theo implementation của paper ở Section V-A-4).
 - Node là transaction trong graph similarity-time.
@@ -31,8 +30,7 @@ Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy proj
 
 ---
 
-
-<h2 style="color: #2c974b;"> Cấu trúc thư mục</h2>
+# Cấu trúc thư mục
 
 ```text
 FRAUDGNN/
@@ -106,77 +104,131 @@ FRAUDGNN/
 │
 ├── requirements.txt
 └── README.md
+```
 
-<h2 style="color: #2c974b;"> Cài đặt</h2><h3>1. Tạo môi trường ảo</h3>
-bash
+---
+
+# Cài đặt
+
+## 1. Tạo môi trường ảo
+
+```bash
 python -m venv venv
 source venv/bin/activate       # Linux/Mac
 # venv\Scripts\activate        # Windows
+```
 
-<h3>2. Cài dependencies</h3>
-bash
+## 2. Cài dependencies
+
+```bash
 pip install -r requirements.txt
+```
 
-<h3>3. Cài PyTorch với CUDA (nếu có GPU)</h3>
-bash
+## 3. Cài PyTorch với CUDA (nếu có GPU)
+
+```bash
 # Xóa PyTorch CPU
 pip uninstall torch torchvision torchaudio -y
 
 # Cài PyTorch với CUDA 11.8
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+```
 
 Lưu ý: Nếu torch-geometric bị lỗi, cài theo hướng dẫn chính thức của PyTorch Geometric đúng với phiên bản CUDA/CPU của máy.
 
-<h2 style="color: #2c974b;"> Chuẩn bị dữ liệu</h2>
-Đặt file dataset vào data/raw/ và sửa đường dẫn trong file config.
+---
 
-<h3>PaySim</h3>
-text
+# 📊 Chuẩn bị dữ liệu
+
+Đặt file dataset vào `data/raw/` và sửa đường dẫn trong file config.
+
+## PaySim
+
+```text
 data/raw/paysim_fast.csv
-Config: configs/paysim.yaml
+```
 
-Lưu ý: PaySim dùng label thật là isFraud, không dùng isFlaggedFraud.
+Config:
 
-<h3>Credit Card 2023</h3>
-text
+```text
+configs/paysim.yaml
+```
+
+Lưu ý: PaySim dùng label thật là `isFraud`, không dùng `isFlaggedFraud`.
+
+## Credit Card 2023
+
+```text
 data/raw/creditcard_2023_fast.csv
-Config: configs/creditcard2023.yaml
+```
 
-<h3>IEEE-CIS</h3>
-text
+Config:
+
+```text
+configs/creditcard2023.yaml
+```
+
+## IEEE-CIS
+
+```text
 data/raw/ieee_cis_fast.csv
-Config: configs/ieee_cis.yaml
+```
 
-<h2 style="color: #2c974b;"> Chạy reproduction</h2><h3>Baseline (FraudGNN-RL)</h3>
-bash
+Config:
+
+```text
+configs/ieee_cis.yaml
+```
+
+---
+
+# 🚀 Chạy reproduction
+
+## Baseline (FraudGNN-RL)
+
+```bash
 python -m src.main_pipeline --config configs/paysim.yaml
+```
 
-<h3>Hybrid (FraudGNN-RL+) - với soft edges + weighted fusion</h3>
-bash
+## Hybrid (FraudGNN-RL+) - với soft edges + weighted fusion
+
+```bash
 # Sửa flags trong config:
 # hybrid_graph: true
 # weighted_fusion: true
 # soft_edges: true
-python -m src.main_pipeline --config configs/paysim_hybrid.yaml
 
-<h3>Với NAF (continuous action)</h3>
-bash
+python -m src.main_pipeline --config configs/paysim_hybrid.yaml
+```
+
+## Với NAF (continuous action)
+
+```bash
 # Sửa flags trong config:
 # rl.type: naf
+
 python -m src.main_pipeline --config configs/paysim_naf.yaml
+```
 
-<h3>Ablation Study</h3>
-bash
+## Ablation Study
+
+```bash
 python scripts/run/run_ablation_timing.py
+```
 
-<h3>Kết quả được lưu tại:</h3>
-text
+Kết quả được lưu tại:
+
+```text
 outputs/results/*.json
 outputs/checkpoints/tssgc_classifier.pt
 outputs/checkpoints/dqn_threshold_agent.pt
+```
 
-<h2 style="color: #2c974b;"> Pipeline</h2>
-text
+---
+
+# 🔄 Pipeline
+
+```text
 Raw Transaction Data
         ↓
 Train / Validation / Test Split
@@ -203,71 +255,107 @@ RL Agent (DQN / NAF)
 Fraud / Legitimate Prediction
         ↓
 Evaluation
+```
 
-<h2 style="color: #2c974b;"> Metrics</h2>
+---
+
+# 📈 Metrics
+
 Project tính:
-AUC-ROC
-AUC-PR
-F1-score
-Precision
-Recall
-Recall@1%
-FPR
-FNR
-Latency (ms)
-Throughput (samples/s)
-Memory usage (RAM/VRAM)
 
-<h2 style="color: #2c974b;"> Kiểm tra nhanh</h2><h3>Unit tests</h3>
-bash
+- AUC-ROC
+- AUC-PR
+- F1-score
+- Precision
+- Recall
+- Recall@1%
+- FPR
+- FNR
+- Latency (ms)
+- Throughput (samples/s)
+- Memory usage (RAM/VRAM)
+
+---
+
+# 🧪 Kiểm tra nhanh
+
+## Unit tests
+
+```bash
 python -m pytest tests/ -v
+```
 
-<h3>Compile check</h3>
-bash
+## Compile check
+
+```bash
 python -m compileall src scripts tests
+```
 
-<h3>Test pipeline với 1% data</h3>
-bash
+## Test pipeline với 1% data
+
+```bash
 python -m src.main_pipeline --config configs/test.yaml
+```
 
-<h2 style="color: #2c974b;"> Giới hạn của bản reproduction</h2>
+---
+
+# ⚠️ Giới hạn của bản reproduction
+
 Do tác giả chưa public source code, một số chi tiết phải diễn giải kỹ thuật:
 
-1. TSSGC temporal branch dùng time-decay + GRUCell để hiện thực hóa ý tưởng GRU time-aware.
-2. NAF (Normalized Advantage Functions) đã được implement để hỗ trợ continuous action space (threshold ∈ [0, 1]).
-   + Mặc định dùng DQN với discrete bins (ổn định hơn)
-   + Có thể bật NAF bằng config: rl.type: naf
-   + Feature importance weights đã được implement trong NAF agent.
-   + RL agent có thể điều chỉnh cả threshold và feature weights.
-3. Federated Learning được implement với FedAvg, nhưng mặc định tắt (do chạy baseline đơn máy). Có thể bật bằng config:
-yaml
+- TSSGC temporal branch dùng time-decay + GRUCell để hiện thực hóa ý tưởng GRU time-aware.
+- NAF (Normalized Advantage Functions) đã được implement để hỗ trợ continuous action space (threshold ∈ [0, 1]).
+- Mặc định dùng DQN với discrete bins (ổn định hơn)
+- Có thể bật NAF bằng config: `rl.type: naf`
+- Feature importance weights đã được implement trong NAF agent.
+- RL agent có thể điều chỉnh cả threshold và feature weights.
+- Federated Learning được implement với FedAvg, nhưng mặc định tắt (do chạy baseline đơn máy). Có thể bật bằng config:
+
+```yaml
 flags:
   federated: true
-4. Graph builder có max_neighbors_per_node để tránh O(N²) bộ nhớ. Đặt null nếu muốn exact exhaustive graph trên sample nhỏ.
-5. Hard-edges builder đã được vector hóa (dùng NearestNeighbors), cải thiện tốc độ ~5-10x so với phiên bản vòng lặp cũ.
+```
 
-<h2 style="color: #2c974b;"> Cấu hình chính</h2><h3>Flags</h3>
-Flag     	 Mặc định	Mô tả
-hard_edges	 true	        Sử dụng hard edges (baseline)
-soft_edges	 false	        Sử dụng soft edges (hybrid)
-hybrid_graph	 false	        Kết hợp hard + soft edges
-weighted_fusion  false	        Weighted fusion cho hybrid
-federated	 false	        Bật Federated Learning
-rl	         true	        Bật RL agent
-pruning	         false	        Bật pruning
-dqn	         true	        Dùng DQN (nếu rl.type: dqn)
+- Graph builder có `max_neighbors_per_node` để tránh O(N²) bộ nhớ. Đặt `null` nếu muốn exact exhaustive graph trên sample nhỏ.
+- Hard-edges builder đã được vector hóa (dùng NearestNeighbors), cải thiện tốc độ ~5-10x so với phiên bản vòng lặp cũ.
 
-<h3>RL Config</h3>
-Key	            Mặc định	     Mô tả
-rl.type	            dqn	             dqn hoặc naf
-rl.threshold_bins   [0.05, ...]	     Discrete bins cho DQN
-rl.epochs	    30	             Số epochs train RL
+---
 
-<h2 style="color: #2c974b;"> Tham khảo</h2>
-Paper: FraudGNN-RL: A Graph Neural Network With Reinforcement Learning for Adaptive Financial Fraud Detection
+# 📝 Cấu hình chính
+
+## Flags
+
+| Flag | Mặc định | Mô tả |
+|------|----------|------|
+| hard_edges | true | Sử dụng hard edges (baseline) |
+| soft_edges | false | Sử dụng soft edges (hybrid) |
+| hybrid_graph | false | Kết hợp hard + soft edges |
+| weighted_fusion | false | Weighted fusion cho hybrid |
+| federated | false | Bật Federated Learning |
+| rl | true | Bật RL agent |
+| pruning | false | Bật pruning |
+| dqn | true | Dùng DQN (nếu rl.type: dqn) |
+
+## RL Config
+
+| Key | Mặc định | Mô tả |
+|------|----------|------|
+| rl.type | dqn | dqn hoặc naf |
+| rl.threshold_bins | [0.05, ...] | Discrete bins cho DQN |
+| rl.epochs | 30 | Số epochs train RL |
+
+---
+
+# 📚 Tham khảo
+
+Paper: **FraudGNN-RL: A Graph Neural Network With Reinforcement Learning for Adaptive Financial Fraud Detection**
+
 IEEE JOCS 2025
 
-<h2 style="color: #2c974b;"> License</h2>
+---
+
+# 📄 License
+
 MIT License
 
 Copyright (c) 2026 FraudGNN-RL Reproduction
