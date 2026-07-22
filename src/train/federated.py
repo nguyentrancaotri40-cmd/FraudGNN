@@ -31,7 +31,11 @@ class FederatedClient:
         self.client_id = client_id
         self.data = data
         self.cfg = copy.deepcopy(cfg)
+        
+        # ✅ FIX: Luôn dùng device được truyền vào
+        # Không tự động chuyển sang cuda để đảm bảo tất cả clients và server cùng device
         self.device = device
+        print(f"[Federated] Client {client_id} on {self.device}")
         
         model_cfg = cfg.get("model", {})
         self.model = model_class(
@@ -40,13 +44,16 @@ class FederatedClient:
             num_layers=int(model_cfg.get("num_layers", 3)),
             num_node_types=int(model_cfg.get("num_node_types", 1)),
             dropout=float(model_cfg.get("dropout", 0.2)),
-        ).to(device)
+        ).to(self.device)
         
+        # ✅ Không khởi tạo optimizer ở đây
         self.optimizer = None
-        
+    
     def set_weights(self, weights: OrderedDict):
         """Set model weights from global model."""
         self.model.load_state_dict(weights)
+        # ✅ Reset optimizer khi nhận weights mới
+        self.optimizer = None
     
     def get_weights(self) -> OrderedDict:
         """Get model weights for aggregation."""
@@ -69,12 +76,12 @@ class FederatedClient:
         device = self.device
         data = self.data.to(device)
         
-        if self.optimizer is None:
-            self.optimizer = torch.optim.Adam(
-                self.model.parameters(),
-                lr=lr,
-                weight_decay=float(self.cfg.get("train", {}).get("weight_decay", 1e-4))
-            )
+        # ✅ Tạo optimizer MỚI mỗi round (đúng FedAvg)
+        self.optimizer = torch.optim.Adam(
+            self.model.parameters(),
+            lr=lr,
+            weight_decay=float(self.cfg.get("train", {}).get("weight_decay", 1e-4))
+        )
         
         pos_weight = _pos_weight(data.y).to(device)
         self.model.train()
@@ -116,7 +123,7 @@ class FederatedClient:
         neighbor_samples = self.cfg.get("train", {}).get("neighbor_samples", [15, 10])
         
         total_loss = 0.0
-        num_batches = 0
+        total_batches = 0
         
         for epoch in range(epochs):
             loader = NeighborLoader(
@@ -129,6 +136,7 @@ class FederatedClient:
             )
             
             epoch_loss = 0.0
+            epoch_batches = 0
             for batch in loader:
                 batch = batch.to(device)
                 self.optimizer.zero_grad()
@@ -142,11 +150,13 @@ class FederatedClient:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5.0)
                 self.optimizer.step()
                 epoch_loss += loss.item()
-                num_batches += 1
+                epoch_batches += 1
             
             total_loss += epoch_loss
+            total_batches += epoch_batches
         
-        avg_loss = total_loss / (epochs * max(1, num_batches)) if num_batches > 0 else 0.0
+        # ✅ Tính avg_loss chính xác
+        avg_loss = total_loss / max(1, total_batches) if total_batches > 0 else 0.0
         
         # ============================================================
         # 🔧 PRUNING: Remove masks before returning weights
@@ -167,6 +177,7 @@ class FederatedClient:
             "auc_roc": metrics.get("auc_roc", 0.0),
             "auc_pr": metrics.get("auc_pr", 0.0),
             "f1": metrics.get("f1", 0.0),
+            "num_batches": total_batches,
         }
     
     def evaluate(self, data) -> Dict[str, float]:
@@ -335,7 +346,6 @@ class FederatedServer:
             round_time = time.perf_counter() - round_start
             round_times.append(round_time)
             
-            # ✅ Lưu thời gian vào history
             if self.history:
                 self.history[-1]["round_time_sec"] = round_time
             
@@ -369,6 +379,11 @@ def create_federated_clients(
     import numpy as np
     import torch
     
+    # ✅ FIX: Strip hybrid_summary trước khi sharding
+    if hasattr(data, "hybrid_summary"):
+        print(f"[Federated] Removing hybrid_summary before sharding")
+        delattr(data, "hybrid_summary")
+    
     clients = []
     
     num_nodes = data.x.size(0)
@@ -388,7 +403,7 @@ def create_federated_clients(
             data=client_data,
             cfg=copy.deepcopy(cfg),
             model_class=model_class,
-            device=device,
+            device=device,  # ✅ Truyền device từ tham số
         )
         clients.append(client)
         print(f"[Federated] Created client {client_id}: {len(client_indices)} nodes")
@@ -423,7 +438,7 @@ def train_federated(
         cfg=cfg,
         model_class=model_class,
         num_clients=num_clients,
-        device=device,
+        device=device,  # ✅ Truyền device
     )
     
     model_cfg = cfg.get("model", {})
@@ -436,7 +451,7 @@ def train_federated(
             "num_node_types": int(model_cfg.get("num_node_types", 1)),
             "dropout": float(model_cfg.get("dropout", 0.2)),
         },
-        device=device,
+        device=device,  # ✅ Truyền device
     )
     
     result = server.federated_training(

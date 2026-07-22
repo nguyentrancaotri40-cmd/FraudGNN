@@ -1,5 +1,5 @@
 # ============================================================
-# CONFIG: PaySim - BASELINE (NHẸ) 
+# CONFIG: PaySim - 10% DATA, 30 EPOCHS (CHẠY NHANH TRÊN GPU)
 # ============================================================
 
 flags:
@@ -7,12 +7,12 @@ flags:
   soft_edges: false
   hybrid_graph: false
   weighted_fusion: false
-  federated: true
+  federated: false          # Tắt federated để chạy nhanh hơn, tiết kiệm VRAM
   dqn: true
   pruning: false
 
 experiment:
-  name: paysim_baseline_light
+  name: paysim_10pct_30epochs
   pipeline: fraudgnn_rl
   dataset: paysim
 
@@ -22,11 +22,11 @@ dataset:
   label_col: isFraud
   time_col: step
   time_unit: hour
-  sample_frac: 0.5                    # ✅ CHỈ 50% DỮ LIỆU (6.36M → 3.18M)
+  sample_frac: 0.1          # 🔴 10% DỮ LIỆU = 636,262 rows
   random_state: 42
 
 split:
-  strategy: stratified_random
+  strategy: temporal
   train_ratio: 0.70
   val_ratio: 0.15
 
@@ -42,20 +42,20 @@ preprocess:
 graph:
   type: transaction_similarity
   time_window_hours: 1.0
-  similarity_threshold: 0.99
-  max_neighbors_per_node: 2              # ✅ GIẢM TỪ 3 XUỐNG 2
+  similarity_threshold: 0.9      # Paper: 0.9
+  max_neighbors_per_node: 3      # Paper: 3
   add_self_loops: true
 
 model:
-  hidden_dim: 64
-  num_layers: 3
+  hidden_dim: 64                 # Paper
+  num_layers: 3                  # Paper
   dropout: 0.20
   num_node_types: 1
 
 train:
-  epochs: 30                            
-  patience: 5
-  batch_size: 64
+  epochs: 30                     # 🔴 30 EPOCHS
+  patience: 10
+  batch_size: 256                # GPU batch size
   learning_rate: 0.001
   weight_decay: 0.0001
 
@@ -63,16 +63,8 @@ rl:
   enabled: true
   threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
   fpr_penalty: 0.5
-  epochs: 30                            
-  batch_size: 256
-
-federated:
-  num_clients: 3
-  rounds: 5                               # ✅ GIẢM TỪ 10 XUỐNG 5
-  local_epochs: 3                         # ✅ GIẢM TỪ 5 XUỐNG 3
-  learning_rate: 0.001
-  batch_size: 64
-  aggregation: fedavg
+  epochs: 30                     # 🔴 30 EPOCHS
+  batch_size: 512
 
 threshold_selection:
   metric: custom

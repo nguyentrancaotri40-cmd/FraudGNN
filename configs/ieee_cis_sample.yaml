@@ -22,7 +22,7 @@ dataset:
   label_col: isFraud
   time_col: time_idx
   time_unit: index
-  sample_frac: 0.10                    # ✅ CHỈ 10% DỮ LIỆU
+  sample_frac: 0.50                    # ✅ CHỈ 50% DỮ LIỆU
   random_state: 42
 
 split:
@@ -123,7 +123,7 @@ model:
   num_node_types: 1
 
 train:
-  epochs: 10                             # ✅ GIẢM TỪ 30 XUỐNG 10
+  epochs: 30                           
   patience: 5
   batch_size: 64
   learning_rate: 0.001
@@ -133,7 +133,7 @@ rl:
   enabled: true
   threshold_bins: [0.10, 0.20, 0.30, 0.40, 0.50, 0.60]
   fpr_penalty: 0.3
-  epochs: 10                             # ✅ GIẢM TỪ 30 XUỐNG 10
+  epochs: 30                            
   batch_size: 256
 
 federated:

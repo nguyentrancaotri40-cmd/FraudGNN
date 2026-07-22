@@ -1,0 +1,73 @@
+# configs/test_hybrid_federated.yaml
+flags:
+  hard_edges: true
+  soft_edges: true
+  hybrid_graph: true          # ✅ BẬT HYBRID
+  weighted_fusion: false
+  federated: true             # ✅ BẬT FEDERATED
+  dqn: true
+  pruning: false
+
+experiment:
+  name: test_hybrid_federated
+  pipeline: fraudgnn_rl
+  dataset: paysim
+
+dataset:
+  name: PaySim
+  path: data/raw/paysim_fast.csv
+  label_col: isFraud
+  time_col: step
+  time_unit: hour
+  sample_frac: 0.001          # ✅ RẤT NHỎ để chạy nhanh
+  random_state: 42
+
+split:
+  strategy: temporal
+  train_ratio: 0.70
+  val_ratio: 0.15
+
+preprocess:
+  drop_cols:
+    - nameOrig
+    - nameDest
+    - isFlaggedFraud
+  categorical_cols:
+    - type
+  numeric_strategy: median
+
+graph:
+  type: transaction_similarity
+  time_window_hours: 1.0
+  similarity_threshold: 0.9
+  max_neighbors_per_node: 2
+  add_self_loops: true
+
+model:
+  hidden_dim: 16              # ✅ NHỎ để nhanh
+  num_layers: 2
+  dropout: 0.20
+  num_node_types: 1
+
+train:
+  epochs: 2
+  patience: 1
+  batch_size: 32
+  learning_rate: 0.001
+  weight_decay: 0.0001
+
+rl:
+  enabled: true
+  threshold_bins: [0.3, 0.5, 0.7]
+  fpr_penalty: 0.5
+  epochs: 1
+  batch_size: 64
+
+federated:
+  num_clients: 2
+  rounds: 1
+  local_epochs: 1
+  learning_rate: 0.001
+  batch_size: 32
+  aggregation: fedavg
+  

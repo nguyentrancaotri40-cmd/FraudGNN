@@ -33,7 +33,20 @@ def _save_hybrid_summary(data, name: str, output_dir: str = "data/graphs") -> No
         with open(out_path, "w") as f:
             json.dump(summary, f, indent=2)
         print(f"[INFO] Saved hybrid_summary to {out_path}")
-        del data.hybrid_summary
+        # ✅ KHÔNG xóa attribute để tránh lỗi
+        # del data.hybrid_summary
+
+
+def _get_optimal_batch_size(num_nodes: int) -> int:
+    """Tính batch size tối ưu dựa trên số nodes."""
+    if num_nodes > 1_000_000:
+        return 16
+    elif num_nodes > 500_000:
+        return 32
+    elif num_nodes > 100_000:
+        return 64
+    else:
+        return 128
 
 
 def train_tssgc_classifier(
@@ -49,6 +62,9 @@ def train_tssgc_classifier(
     model_cfg = cfg.get("model", {})
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
+    print(f"[TSSGC] Using device: {device}")
+    print(f"[TSSGC] Train nodes: {train_data.x.size(0)}, Val nodes: {val_data.x.size(0)}")
+    
     _save_hybrid_summary(train_data, "train")
     _save_hybrid_summary(val_data, "val")
     
@@ -59,6 +75,10 @@ def train_tssgc_classifier(
         num_node_types=int(model_cfg.get("num_node_types", 1)),
         dropout=float(model_cfg.get("dropout", 0.2)),
     ).to(device)
+    
+    # ✅ Log model size
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"[TSSGC] Model parameters: {total_params:,}")
     
     lr = float(train_cfg.get("learning_rate", 1e-3))
     wd = float(train_cfg.get("weight_decay", 1e-4))
@@ -88,7 +108,12 @@ def train_tssgc_classifier(
     
     from torch_geometric.loader import NeighborLoader
     
+    # ✅ Tối ưu batch size dựa trên số nodes
     batch_size = int(train_cfg.get("batch_size", 64))
+    optimal_batch_size = _get_optimal_batch_size(train_data.x.size(0))
+    batch_size = min(batch_size, optimal_batch_size)
+    print(f"[TSSGC] Batch size: {batch_size}")
+    
     neighbor_samples = train_cfg.get("neighbor_samples", [15, 10])
     
     train_loader = NeighborLoader(
@@ -178,7 +203,7 @@ def train_tssgc_classifier(
         history.append({
             "epoch": epoch,
             "loss": avg_loss,
-            "epoch_time_sec": epoch_time,  # ✅ Thêm
+            "epoch_time_sec": epoch_time,
             **val_metrics
         })
         

@@ -102,7 +102,6 @@ class FraudPreprocessor:
         if self.categorical_cols:
             categorical_pipeline = Pipeline([
                 ('imputer', SimpleImputer(strategy='constant', fill_value='missing')),
-                # 🔧 FIX: Thêm dtype=np.float32 và categories='auto'
                 ('onehot', OneHotEncoder(
                     handle_unknown='ignore',
                     sparse_output=True,
@@ -116,20 +115,38 @@ class FraudPreprocessor:
         return ColumnTransformer(transformers, remainder='drop', verbose_feature_names_out=False)
     
     def fit(self, df: pd.DataFrame) -> FraudPreprocessor:
-        """Fit preprocessor on training data."""
-        # 🔧 FIX: Convert categorical columns to string để tránh mixed types
+        """
+        Fit preprocessor on training data.
+        
+        ✅ FIX D: Ép kiểu TẤT CẢ categorical columns (config + auto-detect)
+        để tránh mixed-type error trong OneHotEncoder.
+        """
+        # ✅ Bước 1: Ép kiểu cho categorical columns đã config (lần 1)
         for col in self.categorical_cols:
             if col in df.columns:
                 df[col] = df[col].astype(str)
         
+        # ✅ Bước 2: Identify columns (phát hiện thêm categorical columns)
         self._identify_columns(df)
+        
+        # ✅ Bước 3: Ép kiểu cho TẤT CẢ categorical columns (config + auto-detect) (lần 2)
+        for col in self.categorical_cols:
+            if col in df.columns:
+                df[col] = df[col].astype(str)
+        
+        # ✅ Bước 4: Build và fit preprocessor
         self.preprocessor = self._build_preprocessor()
         self.preprocessor.fit(df)
         return self
     
     def transform(self, df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Transform data: return features, labels, time values."""
-        # 🔧 FIX: Convert categorical columns to string trong transform
+        """
+        Transform data: return features, labels, time values.
+        
+        ✅ FIX D: Ép kiểu TẤT CẢ categorical columns trong transform
+        để tránh mixed-type error khi transform dữ liệu mới.
+        """
+        # ✅ Ép kiểu cho TẤT CẢ categorical columns
         for col in self.categorical_cols:
             if col in df.columns:
                 df[col] = df[col].astype(str)

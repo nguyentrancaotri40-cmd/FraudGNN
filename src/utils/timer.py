@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import time
 import functools
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 import psutil
 import torch
+import warnings
 
 
 def timer(func: Callable) -> Callable:
@@ -80,8 +81,8 @@ def measure_latency(model, data, device: str = "cpu", num_runs: int = 100) -> Di
     }
 
 
-def get_memory_usage() -> Dict[str, float]:
-    """Lấy thông tin memory usage."""
+def get_memory_usage(alert_threshold: float = 0.85) -> Dict[str, float]:
+    """Lấy thông tin memory usage và cảnh báo nếu gần OOM."""
     mem = psutil.virtual_memory()
     
     result = {
@@ -91,10 +92,26 @@ def get_memory_usage() -> Dict[str, float]:
         "ram_usage_percent": mem.percent,
     }
     
+    # ✅ Cảnh báo nếu memory quá cao
+    if mem.percent > alert_threshold * 100:
+        warnings.warn(
+            f"⚠️ High memory usage: {mem.percent:.1f}% "
+            f"(threshold: {alert_threshold*100:.0f}%)",
+            ResourceWarning
+        )
+    
     if torch.cuda.is_available():
         result["vram_allocated_gb"] = torch.cuda.memory_allocated() / (1024**3)
         result["vram_reserved_gb"] = torch.cuda.memory_reserved() / (1024**3)
         result["vram_max_allocated_gb"] = torch.cuda.max_memory_allocated() / (1024**3)
+        
+        # ✅ Cảnh báo nếu VRAM cao
+        vram_percent = result["vram_allocated_gb"] / result.get("vram_total_gb", 1)
+        if vram_percent > 0.85:
+            warnings.warn(
+                f"⚠️ High GPU memory: {result['vram_allocated_gb']:.2f}GB",
+                ResourceWarning
+            )
     
     return result
 
@@ -123,7 +140,7 @@ def print_timing_summary(timing: Dict[str, float]):
         ("graph_building_sec", "Graph Building"),
         ("federated_training_sec", "Federated Training"),
         ("tssgc_training_sec", "TSSGC Training"),
-        ("dqn_training_sec", "DQN Training"),
+        ("rl_training_sec", "RL Training"),
         ("inference_sec", "Inference"),
         ("total_runtime_sec", "TOTAL"),
     ]

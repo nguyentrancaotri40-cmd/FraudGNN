@@ -1,43 +1,31 @@
-Raw Transaction Data
-        ↓
-Data Preprocessing
-        ↓
-Transaction Graph Construction
-        ↓
-(TSSGC Encoder)
-   ├── Temporal Modeling
-   ├── Spatial Modeling
-   └── Semantic Modeling
-        ↓
-Graph Embedding / Fraud Representation
-        ↓
-RL Agent (DQN / NAF)
-        ↓
-Threshold & Feature Weight Adjustment
-        ↓
-Fraud Classification
-        ↓
-Fraud / Legitimate Prediction
-        ↓
-Evaluation Metrics
-
-
-
-
-Luồng xứ lý code:
+Luồng xử lý code:
 
 raw data
-↓
+    ↓
+src/data/load_data.py
+    ↓
+src/data/split.py
+    ↓
 src/data/preprocess.py
-↓
-src/graph/build_graph.py
-↓
+    ↓
+src/graph/build_graph.py  (baseline - hard edges)
+src/graph/hybrid_graph.py (hybrid - hard + soft edges)
+src/graph/soft_behavior_graph.py (soft edges)
+    ↓
 src/models/tssgc.py
-↓
-src/models/dqn_agent.py
-↓
+    ↓
+src/models/classifier.py
+    ↓
 src/models/fraudgnn_rl.py
-↓
-src/train/trainer.py
-↓
+    ↓
+src/train/federated.py (optional)
+    ↓
+src/train/train_gnn.py
+    ↓
+src/train/train_rl.py (DQN/NAF)
+    ↓
+src/train/pipeline_fraudgnn.py (main pipeline)
+    ↓
 src/eval/evaluate.py
+    ↓
+src/eval/metrics.py

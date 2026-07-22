@@ -1,6 +1,3 @@
-# ============================================================
-# CONFIG: IEEE-CIS - FULL BASELINE REPRODUCTION
-# ============================================================
 
 flags:
   hard_edges: true
@@ -12,7 +9,7 @@ flags:
   pruning: false
 
 experiment:
-  name: ieee_baseline_full
+  name: ieee_cis_50pct_100epochs
   pipeline: fraudgnn_rl
   dataset: ieee
 
@@ -22,7 +19,7 @@ dataset:
   label_col: isFraud
   time_col: time_idx
   time_unit: index
-  sample_frac: 1.0
+  sample_frac: 0.5                    # ✅ 50% DATA
   random_state: 42
 
 split:
@@ -112,20 +109,20 @@ preprocess:
 graph:
   type: transaction_similarity
   time_window_hours: 50.0
-  similarity_threshold: 0.99
-  max_neighbors_per_node: 3
+  similarity_threshold: 0.95          # ✅ GIẢM TỪ 0.99 XUỐNG 0.95
+  max_neighbors_per_node: 3           # ✅ PAPER
   add_self_loops: true
 
 model:
-  hidden_dim: 64
-  num_layers: 3
+  hidden_dim: 64                      # ✅ PAPER
+  num_layers: 3                       # ✅ PAPER
   dropout: 0.20
   num_node_types: 1
 
 train:
-  epochs: 30
-  patience: 10
-  batch_size: 64
+  epochs: 100                         # ✅ PAPER
+  patience: 15
+  batch_size: 32                      # ✅ GIẢM ĐỂ TRÁNH OOM
   learning_rate: 0.001
   weight_decay: 0.0001
 
@@ -133,15 +130,15 @@ rl:
   enabled: true
   threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60]
   fpr_penalty: 0.3
-  epochs: 30
+  epochs: 100                         # ✅ PAPER
   batch_size: 256
 
 federated:
   num_clients: 3
-  rounds: 10
-  local_epochs: 5
+  rounds: 20                           # ✅ Tăng lên 20
+  local_epochs: 5                      # ✅ Tăng lên 5
   learning_rate: 0.001
-  batch_size: 64
+  batch_size: 32                      # ✅ GIẢM ĐỂ TRÁNH OOM
   aggregation: fedavg
 
 threshold_selection:

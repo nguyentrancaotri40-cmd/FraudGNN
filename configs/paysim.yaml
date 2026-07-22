@@ -1,6 +1,3 @@
-# ============================================================
-# CONFIG: PaySim - FULL BASELINE REPRODUCTION
-# ============================================================
 
 flags:
   hard_edges: true
@@ -12,7 +9,7 @@ flags:
   pruning: false
 
 experiment:
-  name: paysim_baseline_full
+  name: paysim_50pct_100epochs
   pipeline: fraudgnn_rl
   dataset: paysim
 
@@ -22,7 +19,7 @@ dataset:
   label_col: isFraud
   time_col: step
   time_unit: hour
-  sample_frac: 1.0
+  sample_frac: 0.5                    # ✅ 50% DATA
   random_state: 42
 
 split:
@@ -42,19 +39,19 @@ preprocess:
 graph:
   type: transaction_similarity
   time_window_hours: 1.0
-  similarity_threshold: 0.99
-  max_neighbors_per_node: 3
+  similarity_threshold: 0.9            # ✅ PAPER: 0.9
+  max_neighbors_per_node: 3            # ✅ PAPER: 3
   add_self_loops: true
 
 model:
-  hidden_dim: 64
-  num_layers: 3
+  hidden_dim: 64                       # ✅ PAPER
+  num_layers: 3                        # ✅ PAPER
   dropout: 0.20
   num_node_types: 1
 
 train:
-  epochs: 30
-  patience: 10
+  epochs: 100                          # ✅ PAPER
+  patience: 15                         # ✅ Tăng patience
   batch_size: 64
   learning_rate: 0.001
   weight_decay: 0.0001
@@ -63,13 +60,13 @@ rl:
   enabled: true
   threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
   fpr_penalty: 0.5
-  epochs: 30
+  epochs: 100                          # ✅ PAPER
   batch_size: 256
 
 federated:
   num_clients: 3
-  rounds: 10
-  local_epochs: 5
+  rounds: 20                           # ✅ Tăng lên 20
+  local_epochs: 5                      # ✅ Tăng lên 5
   learning_rate: 0.001
   batch_size: 64
   aggregation: fedavg
