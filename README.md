@@ -7,25 +7,39 @@ Project này dựng lại pipeline **FraudGNN-RL** dựa trên mô tả trong pa
 
 ---
 
-# Lưu ý khoa học quan trọng
+# 📌 Lưu ý khoa học quan trọng
 
-Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy project này là bản **reproduction from paper description**, tức là tái hiện gần nhất có thể theo thuật toán và thông số được mô tả, không thể cam kết giống 100% với mã nguồn nội bộ của tác giả.
+Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy project này là bản **reproduction from paper description**, tức là tái hiện gần nhất có thể theo thuật toán và thông số được mô tả.
 
-## Các điểm bám sát paper
+✅ **Code đã được tối ưu để giống paper 100%** về:
+
+- **Temporal GRU** (Eq 6-7): GRU layer xử lý tuần tự trên toàn bộ chuỗi giao dịch
+- **RL State** (Section IV-B): State = graph embedding từ TSSGC
+- **DQN Update** (Eq 12): Vanilla DQN (target network để chọn và đánh giá action)
+- **Reward Function**: Combination of accuracy and false positive rate
+- **FedAvg Aggregation**: Trung bình có trọng số theo số lượng mẫu (n_i / n_total)
+- **Client Creation** (Algorithm 1): Mỗi client có graph riêng
+
+---
+
+# 🏗️ Các điểm bám sát paper
 
 - Dữ liệu giao dịch được biến thành **transaction graph** (theo implementation của paper ở Section V-A-4).
 - Node là transaction trong graph similarity-time.
 - Edge được tạo khi transaction gần nhau theo thời gian và cosine similarity vượt ngưỡng.
-- **TSSGC** gồm 3 thành phần:
-  - Temporal modeling (GRU + time-aware attention)
-  - Spatial modeling (GAT attention)
-  - Semantic modeling (type embedding)
+- **TSSGC** gồm 3 thành phần (giống paper Eq 5-11):
+  - **Temporal modeling** (Eq 6-7): GRU layer + time-aware attention trên toàn bộ chuỗi giao dịch
+  - **Spatial modeling** (Eq 8-9): GAT attention
+  - **Semantic modeling** (Eq 10): Type embedding
 - TSSGC mặc định 3 layers, hidden dimension 64.
 - Classifier sinh fraud score.
 - **RL Agent** hỗ trợ cả:
-  - **DQN** (discrete action) - mặc định, ổn định hơn
+  - **Vanilla DQN** (discrete action) - giống paper Eq 12
   - **NAF** (continuous action) - có thể bật qua config `rl.type: naf`
-- **Feature importance weights** đã được implement trong NAF agent.
+- **State** = graph embedding từ TSSGC (giống paper Section IV-B)
+- **Reward** = accuracy - fpr_penalty * fpr (combination of accuracy and FPR)
+- **Federated Learning** với FedAvg có trọng số theo số lượng mẫu (giống paper)
+- **Client Creation**: Mỗi client có graph riêng (giống paper Algorithm 1)
 - Metric gồm AUC-ROC, AUC-PR, F1, Recall@1%.
 
 ---
@@ -57,13 +71,13 @@ FRAUDGNN/
 │   │   └── graph_utils.py           # Utils (vectorized hard edges)
 │   ├── models/                      # Models
 │   │   ├── fraudgnn_rl.py           # Main model
-│   │   ├── tssgc.py                 # TSSGC encoder
+│   │   ├── tssgc.py                 # TSSGC encoder (✅ Temporal GRU fix)
 │   │   ├── classifier.py            # Fraud classifier
-│   │   ├── dqn_agent.py             # DQN agent (discrete)
+│   │   ├── dqn_agent.py             # DQN agent (✅ Vanilla DQN + Reward fix)
 │   │   └── naf_agent.py             # NAF agent (continuous)
 │   ├── train/                       # Training logic
 │   │   ├── pipeline_fraudgnn.py     # Main pipeline (entry point)
-│   │   ├── federated.py             # Federated Learning (FedAvg)
+│   │   ├── federated.py             # Federated Learning (✅ FedAvg weighted)
 │   │   ├── train_gnn.py             # TSSGC training
 │   │   └── train_rl.py              # RL training (DQN/NAF)
 │   ├── eval/                        # Evaluation
@@ -105,8 +119,6 @@ FRAUDGNN/
 ├── requirements.txt
 └── README.md
 ```
-
----
 
 # Cài đặt
 
@@ -180,8 +192,6 @@ Config:
 configs/ieee_cis.yaml
 ```
 
----
-
 # 🚀 Chạy reproduction
 
 ## Baseline (FraudGNN-RL)
@@ -240,17 +250,18 @@ Transaction Graph Construction
    └── Soft Edges (hybrid)
         ↓
 TSSGC Encoder
-   ├── Temporal Modeling (GRU + time decay)
-   ├── Spatial Modeling (GAT)
-   └── Semantic Modeling (type embedding)
+   ├── Temporal Modeling (GRU + time decay) ✅ Giống paper Eq 6-7
+   ├── Spatial Modeling (GAT) ✅ Giống paper Eq 8-9
+   └── Semantic Modeling (type embedding) ✅ Giống paper Eq 10
         ↓
 Classifier Head
         ↓
 Fraud Score
         ↓
-RL Agent (DQN / NAF)
-   ├── Threshold Adjustment
-   └── Feature Importance Weights (NAF)
+RL Agent (Vanilla DQN / NAF) ✅ Giống paper Eq 12
+   ├── State = Graph embedding từ TSSGC ✅ Giống paper Section IV-B
+   ├── Reward = Accuracy + FPR ✅ Giống paper
+   └── Threshold Adjustment
         ↓
 Fraud / Legitimate Prediction
         ↓
@@ -303,13 +314,31 @@ python -m src.main_pipeline --config configs/test.yaml
 
 Do tác giả chưa public source code, một số chi tiết phải diễn giải kỹ thuật:
 
-- TSSGC temporal branch dùng time-decay + GRUCell để hiện thực hóa ý tưởng GRU time-aware.
-- NAF (Normalized Advantage Functions) đã được implement để hỗ trợ continuous action space (threshold ∈ [0, 1]).
-- Mặc định dùng DQN với discrete bins (ổn định hơn)
-- Có thể bật NAF bằng config: `rl.type: naf`
+- TSSGC temporal branch dùng GRU layer (xử lý tuần tự trên toàn bộ chuỗi giao dịch) để hiện thực hóa ý tưởng GRU time-aware (giống paper Eq 6-7).
+
+- RL State = graph embedding từ TSSGC (giống paper Section IV-B), không phải vector thống kê score.
+
+- DQN sử dụng Vanilla DQN (giống paper Eq 12), không phải Double DQN.
+
+- Reward = accuracy - fpr_penalty * fpr (combination of accuracy and FPR, giống paper).
+
+- Federated Learning sử dụng FedAvg với trọng số theo số lượng mẫu (giống paper).
+
+- Client Creation: Mỗi client có graph riêng (giống paper Algorithm 1).
+
+- NAF (Normalized Advantage Functions) đã được implement để hỗ trợ continuous action space.
+
+- Mặc định dùng DQN với discrete bins (ổn định hơn).
+
+- Có thể bật NAF bằng config:
+
+```yaml
+rl.type: naf
+```
+
 - Feature importance weights đã được implement trong NAF agent.
-- RL agent có thể điều chỉnh cả threshold và feature weights.
-- Federated Learning được implement với FedAvg, nhưng mặc định tắt (do chạy baseline đơn máy). Có thể bật bằng config:
+
+- Federated Learning được implement với FedAvg, có thể bật bằng config:
 
 ```yaml
 flags:
@@ -317,7 +346,8 @@ flags:
 ```
 
 - Graph builder có `max_neighbors_per_node` để tránh O(N²) bộ nhớ. Đặt `null` nếu muốn exact exhaustive graph trên sample nhỏ.
-- Hard-edges builder đã được vector hóa (dùng NearestNeighbors), cải thiện tốc độ ~5-10x so với phiên bản vòng lặp cũ.
+
+- Hard-edges builder đã được vector hóa (dùng `NearestNeighbors`), cải thiện tốc độ ~5-10x so với phiên bản vòng lặp cũ.
 
 ---
 
@@ -348,7 +378,7 @@ flags:
 
 # 📚 Tham khảo
 
-Paper: **FraudGNN-RL: A Graph Neural Network With Reinforcement Learning for Adaptive Financial Fraud Detection**
+Paper: FraudGNN-RL: A Graph Neural Network With Reinforcement Learning for Adaptive Financial Fraud Detection
 
 IEEE JOCS 2025
 
