@@ -123,13 +123,64 @@ def load_dataset(cfg: Dict[str, Any]) -> pd.DataFrame:
             f"Available columns: {list(df.columns)[:30]}..."
         )
 
-    #  FIX: Sample toàn bộ dataset TRƯỚC KHI SPLIT
-    # Điều này đảm bảo train/val/test đều có cùng tỷ lệ sample
+    # ============================================================
+    # ✅ FIX: TẠO CỘT time_idx NẾU CHƯA CÓ (cho IEEE-CIS)
+    # ============================================================
+    time_col = ds.get("time_col")
+    
+    # Nếu config yêu cầu time_idx nhưng không có, tạo từ TransactionDT
+    if time_col == "time_idx" and time_col not in df.columns:
+        if "TransactionDT" in df.columns:
+            df["time_idx"] = df["TransactionDT"]
+            print("[INFO] Created 'time_idx' from 'TransactionDT'")
+        elif "time" in df.columns:
+            df["time_idx"] = df["time"]
+            print("[INFO] Created 'time_idx' from 'time'")
+        else:
+            # Tạo index nếu không có cột thời gian nào
+            df["time_idx"] = range(len(df))
+            print("[INFO] Created 'time_idx' as row index (no time column found)")
+
+    # ============================================================
+    # ✅ GIỐNG PAPER: STRATIFIED RANDOM SAMPLING
+    # ============================================================
+    # Paper: random sampling để tạo tập con với tỷ lệ fraud kiểm soát
+    # Nhưng vẫn giữ nguyên thứ tự thời gian (sort after sampling)
     sample_frac = ds.get("sample_frac", 1.0)
-    if sample_frac is not None and sample_frac < 1.0:
+    use_stratified_sampling = ds.get("stratified_sampling", True)
+    
+    if sample_frac is not None and sample_frac < 1.0 and use_stratified_sampling:
+        print(f"[INFO] Stratified random sampling: {sample_frac*100:.0f}%")
+        
+        # ✅ Giữ nguyên thứ tự thời gian TRƯỚC KHI SAMPLING
+        if time_col and time_col in df.columns:
+            df = df.sort_values(time_col).reset_index(drop=True)
+            print(f"[INFO] Sorted by time_col: {time_col} before sampling")
+        
+        # ✅ Tách fraud và normal, lấy mẫu ngẫu nhiên từng class
+        fraud_df = df[df[label_col] == 1]
+        normal_df = df[df[label_col] == 0]
+        
+        original_fraud = len(fraud_df)
+        original_normal = len(normal_df)
+        
+        # Lấy mẫu với tỷ lệ sample_frac cho từng class
+        sampled_fraud = fraud_df.sample(frac=sample_frac, random_state=random_state)
+        sampled_normal = normal_df.sample(frac=sample_frac, random_state=random_state)
+        
+        # Ghép lại và SORT theo thời gian (GIỮ NGUYÊN THỨ TỰ THỜI GIAN)
+        df = pd.concat([sampled_normal, sampled_fraud]).sort_values(time_col).reset_index(drop=True)
+        
+        print(f"[INFO] Sampled {sample_frac*100:.0f}% of data:")
+        print(f"  Fraud: {original_fraud:,} -> {len(sampled_fraud):,}")
+        print(f"  Normal: {original_normal:,} -> {len(sampled_normal):,}")
+        print(f"  Total: {original_fraud + original_normal:,} -> {len(df):,}")
+    else:
+        # Fallback: sample thông thường
         original_len = len(df)
-        df = df.sample(frac=sample_frac, random_state=random_state)
-        print(f"[INFO] Sampled {sample_frac*100:.0f}% of data: {original_len:,} -> {len(df):,} rows")
+        if sample_frac is not None and sample_frac < 1.0:
+            df = df.sample(frac=sample_frac, random_state=random_state)
+            print(f"[INFO] Sampled {sample_frac*100:.0f}% of data: {original_len:,} -> {len(df):,} rows")
 
     # Ưu tiên sample theo class nếu config có normal_sample_size/fraud_sample_size
     normal_sample_size = ds.get("normal_sample_size")
@@ -151,5 +202,11 @@ def load_dataset(cfg: Dict[str, Any]) -> pd.DataFrame:
     print("\nLoaded dataset:")
     print(f"  shape: {df.shape}")
     print(f"  labels: {df[label_col].value_counts().sort_index().to_dict()}")
+    
+    # Log time column info
+    if time_col and time_col in df.columns:
+        print(f"  time_col: {time_col} (min: {df[time_col].min()}, max: {df[time_col].max()})")
+    else:
+        print(f"  ⚠️ time_col '{time_col}' not found!")
 
     return df

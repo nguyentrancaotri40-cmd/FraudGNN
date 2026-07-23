@@ -1,3 +1,22 @@
+# ============================================================
+# CONFIG: IEEE-CIS - FULL REPRODUCTION (GIỐNG PAPER 100%)
+# ============================================================
+# ✅ Giống paper 100%:
+#   - Temporal split (70-15-15)
+#   - batch_size: 64 / 256
+#   - epochs: 100
+#   - learning_rate: 0.001
+#   - dropout: 0.2
+#   - max_neighbors_per_node: 3
+#   - hidden_dim: 64, num_layers: 3
+#   - similarity_threshold: 0.99
+#   - federated: true
+#   - Stratified random sampling (giữ tỷ lệ fraud)
+#
+# ⚠️ Chỉ khác paper (để chạy với RAM thấp):
+#   - sample_frac: 0.5 (50% data - paper ko quy định)
+# ============================================================
+
 flags:
   hard_edges: true
   soft_edges: false
@@ -16,19 +35,20 @@ dataset:
   name: IEEE-CIS
   path: data/raw/ieee_cis_fast.csv
   label_col: isFraud
-  time_col: time_idx
-  time_unit: index
-  sample_frac: 0.5         # ✅ Giảm data để chạy (paper ko quy định)
+  time_col: TransactionDT      # ✅ SỬA: dùng TransactionDT (có sẵn trong data)
+  time_unit: second            # ✅ SỬA: đơn vị giây
+  sample_frac: 0.5             # ✅ Giảm data để chạy (paper ko quy định)
+  stratified_sampling: true    # ✅ GIỐNG PAPER: random sampling giữ tỷ lệ
   random_state: 42
 
 split:
-  strategy: temporal       # ✅ GIỐNG PAPER
+  strategy: temporal           # ✅ GIỐNG PAPER
   train_ratio: 0.70
   val_ratio: 0.15
 
 preprocess:
   drop_cols:
-    - time_idx
+    - time_idx                 # ✅ Không còn cần vì đã dùng TransactionDT
     - TransactionID
     - TransactionDT
     - card1
@@ -108,7 +128,7 @@ preprocess:
 graph:
   type: transaction_similarity
   time_window_hours: 50.0
-  similarity_threshold: 0.99        # ✅ FIX: GIỐNG PAPER (0.99)
+  similarity_threshold: 0.99        # ✅ GIỐNG PAPER
   max_neighbors_per_node: 3         # ✅ GIỐNG PAPER
   add_self_loops: true
 
@@ -121,7 +141,7 @@ model:
 train:
   epochs: 100                       # ✅ GIỐNG PAPER
   patience: 15
-  batch_size: 64                    # ✅ FIX: GIỐNG PAPER
+  batch_size: 64                    # ✅ GIỐNG PAPER
   learning_rate: 0.001
   weight_decay: 0.0001
 
@@ -134,10 +154,10 @@ rl:
 
 federated:
   num_clients: 3
-  rounds: 20                        # ✅ Có thể giữ (paper ko quy định)
-  local_epochs: 5                   # ✅ Có thể giữ (paper ko quy định)
+  rounds: 20                        # ✅ Paper ko quy định, giữ nguyên
+  local_epochs: 5                   # ✅ Paper ko quy định, giữ nguyên
   learning_rate: 0.001
-  batch_size: 64                    # ✅ FIX: GIỐNG PAPER
+  batch_size: 64                    # ✅ GIỐNG PAPER
   aggregation: fedavg
 
 threshold_selection:

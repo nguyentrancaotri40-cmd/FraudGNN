@@ -1,5 +1,5 @@
 # ============================================================
-# CONFIG: CreditCard2023 - TEST NHANH (GIỐNG PAPER)
+# CONFIG: CreditCard 2023 - TEST NHANH (GIỐNG PAPER)
 # ============================================================
 # ✅ Giống paper 100% về:
 #   - Temporal split (70-15-15)
@@ -8,6 +8,7 @@
 #   - max_neighbors_per_node (3)
 #   - hidden_dim (64), num_layers (3)
 #   - similarity_threshold (0.98)
+#   - Stratified random sampling (giữ tỷ lệ fraud)
 #
 # ⚠️ Chỉ khác paper:
 #   - sample_frac: 0.1 (chỉ 10% data để chạy nhanh)
@@ -37,6 +38,7 @@ dataset:
   time_col: id
   time_unit: index
   sample_frac: 0.1         # ✅ 10% DATA - CHỈ ĐỂ TEST
+  stratified_sampling: true   # ✅ GIỐNG PAPER: random sampling giữ tỷ lệ
   random_state: 42
 
 split:

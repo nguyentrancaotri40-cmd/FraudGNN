@@ -1,3 +1,20 @@
+# ============================================================
+# CONFIG: CreditCard 2023 - FULL REPRODUCTION (GIỐNG PAPER 100%)
+# ============================================================
+# ✅ Giống paper 100%:
+#   - Temporal split (70-15-15)
+#   - batch_size (64 / 256)
+#   - epochs (100)
+#   - max_neighbors_per_node (3)
+#   - hidden_dim (64), num_layers (3)
+#   - similarity_threshold (0.98)
+#   - federated: true
+#   - Stratified random sampling (giữ tỷ lệ fraud)
+#
+# ⚠️ Chỉ khác paper (để chạy với RAM thấp):
+#   - sample_frac: 0.5 (50% data - paper ko quy định)
+# ============================================================
+
 flags:
   hard_edges: true
   soft_edges: false
@@ -19,6 +36,7 @@ dataset:
   time_col: id
   time_unit: index
   sample_frac: 0.5         # ✅ Giảm data để chạy (paper ko quy định)
+  stratified_sampling: true   # ✅ GIỐNG PAPER: random sampling giữ tỷ lệ
   random_state: 42
 
 split:
@@ -61,8 +79,8 @@ rl:
 
 federated:
   num_clients: 3
-  rounds: 20                       # ✅ Có thể giữ (paper ko quy định)
-  local_epochs: 5                  # ✅ Có thể giữ (paper ko quy định)
+  rounds: 20                       # ✅ Paper ko quy định, giữ nguyên
+  local_epochs: 5                  # ✅ Paper ko quy định, giữ nguyên
   learning_rate: 0.001
   batch_size: 64                   # ✅ GIỐNG PAPER
   aggregation: fedavg

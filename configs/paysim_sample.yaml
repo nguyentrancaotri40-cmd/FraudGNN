@@ -8,6 +8,7 @@
 #   - max_neighbors_per_node (3)
 #   - hidden_dim (64), num_layers (3)
 #   - similarity_threshold (0.9)
+#   - Stratified random sampling (giữ tỷ lệ fraud)
 #
 # ⚠️ Chỉ khác paper:
 #   - sample_frac: 0.1 (chỉ 10% data để chạy nhanh)
@@ -37,6 +38,7 @@ dataset:
   time_col: step
   time_unit: hour
   sample_frac: 0.1         # ✅ 10% DATA - CHỈ ĐỂ TEST
+  stratified_sampling: true   # ✅ GIỐNG PAPER: random sampling giữ tỷ lệ
   random_state: 42
 
 split:

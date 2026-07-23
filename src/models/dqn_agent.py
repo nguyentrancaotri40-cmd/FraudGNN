@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 import random
-from typing import Deque, List, Tuple
+from typing import Deque, List, Tuple, Optional
 import numpy as np
 import torch
 import torch.nn as nn
@@ -52,7 +52,7 @@ class DQN(nn.Module):
 class ThresholdDQNAgent:
     state_dim: int
     thresholds: List[float]
-    n_features: int = 10  # ✅ SỐ FEATURE (sẽ lấy từ model)
+    n_features: int = 10
     hidden_dim: int = 128
     gamma: float = 0.99
     lr: float = 1e-3
@@ -70,8 +70,6 @@ class ThresholdDQNAgent:
         self.optimizer = torch.optim.Adam(self.policy_net.parameters(), lr=self.lr)
         self.memory = ReplayBuffer(self.buffer_size)
         self.epsilon = self.epsilon_start
-        
-        # ✅ Feature importance weights (khởi tạo đều)
         self.feature_weights = torch.ones(self.n_features, device=self.device) / self.n_features
 
     def act(self, state: np.ndarray, explore: bool = True) -> int:
@@ -85,8 +83,15 @@ class ThresholdDQNAgent:
         return float(self.thresholds[action])
 
     def update(self, batch_size: int = 64) -> float | None:
+        """
+        ✅ GIỐNG PAPER: Vanilla DQN update (Eq 12)
+        
+        Paper: target = r + γ * max_a' Q(s', a'; θ⁻)
+        Dùng target network để chọn AND đánh giá action.
+        """
         if len(self.memory) < batch_size:
             return None
+        
         states, actions, rewards, next_states, dones = self.memory.sample(batch_size)
         states = states.to(self.device)
         actions = actions.to(self.device)
@@ -94,18 +99,23 @@ class ThresholdDQNAgent:
         next_states = next_states.to(self.device)
         dones = dones.to(self.device)
 
+        # Current Q values
         q_values = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
         
+        # ✅ GIỐNG PAPER: Vanilla DQN
+        # Dùng target network để tính max Q cho next state
         with torch.no_grad():
-            next_actions = self.policy_net(next_states).argmax(dim=1, keepdim=True)
-            next_q = self.target_net(next_states).gather(1, next_actions).squeeze(1)
+            # Chọn và đánh giá bằng target_net (giống paper Eq 12)
+            next_q = self.target_net(next_states).max(dim=1)[0]
             target = rewards + self.gamma * next_q * (1.0 - dones)
         
         loss = F.mse_loss(q_values, target)
+        
         self.optimizer.zero_grad()
         loss.backward()
         nn.utils.clip_grad_norm_(self.policy_net.parameters(), 5.0)
         self.optimizer.step()
+        
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
         return float(loss.item())
 
@@ -114,17 +124,24 @@ class ThresholdDQNAgent:
 
 
 class BatchThresholdEnvironment:
-    """Offline RL environment cho adaptive threshold selection."""
+    """
+    Offline RL environment cho adaptive threshold selection.
+    
+    ✅ GIỐNG PAPER: State = graph embedding từ TSSGC
+    ✅ GIỐNG PAPER: Reward = combination of accuracy and FPR
+    """
     
     def __init__(
         self,
         scores: np.ndarray,
         labels: np.ndarray,
+        graph_embeddings: Optional[np.ndarray] = None,
         batch_size: int = 256,
         fpr_penalty: float = 2.0,
     ):
         self.scores = np.asarray(scores, dtype=np.float32)
         self.labels = np.asarray(labels, dtype=np.int64)
+        self.graph_embeddings = graph_embeddings
         self.batch_size = int(batch_size)
         self.fpr_penalty = float(fpr_penalty)
         self.pos = 0
@@ -132,10 +149,15 @@ class BatchThresholdEnvironment:
         self.history = []
         self.threshold_history = []
         self.memory_size = 10
+        
+        if self.graph_embeddings is not None:
+            self.embedding_dim = self.graph_embeddings.shape[1]
+        else:
+            self.embedding_dim = 64
 
     @property
     def state_dim(self) -> int:
-        return 9
+        return self.embedding_dim
 
     def reset(self) -> np.ndarray:
         self.pos = 0
@@ -150,34 +172,29 @@ class BatchThresholdEnvironment:
         return self.scores[start:end], self.labels[start:end]
 
     def _state_for_current_batch(self) -> np.ndarray:
+        """
+        ✅ GIỐNG PAPER: State = graph embedding từ TSSGC
+        """
         s, y = self._batch()
         if len(s) == 0:
             return np.zeros(self.state_dim, dtype=np.float32)
         
-        current_fraud_ratio = float(np.mean(y))
+        if self.graph_embeddings is not None:
+            start = self.pos
+            end = min(len(self.scores), start + self.batch_size)
+            batch_embeddings = self.graph_embeddings[start:end]
+            state = np.mean(batch_embeddings, axis=0)
+            return state.astype(np.float32)
         
-        if len(self.history) > 0:
-            trend = current_fraud_ratio - np.mean(self.history[-5:])
-        else:
-            trend = 0.0
-        
-        if len(self.threshold_history) > 0:
-            threshold_mean = float(np.mean(self.threshold_history[-5:]))
-            threshold_std = float(np.std(self.threshold_history[-5:])) if len(self.threshold_history) > 1 else 0.0
-        else:
-            threshold_mean = 0.5
-            threshold_std = 0.0
-        
+        # Fallback (không khuyến nghị)
         return np.array([
             float(np.mean(s)),
             float(np.std(s)),
             float(np.min(s)),
             float(np.max(s)),
-            current_fraud_ratio,
+            float(np.mean(y)),
             float(len(s) / max(1, len(self.scores))),
             float(self.current_threshold),
-            threshold_mean,
-            threshold_std,
         ], dtype=np.float32)
 
     def _calculate_pos_step(self, threshold: float, scores: np.ndarray, labels: np.ndarray) -> int:
@@ -214,18 +231,20 @@ class BatchThresholdEnvironment:
         fn = np.sum((pred == 0) & (y == 1))
         tn = np.sum((pred == 0) & (y == 0))
         
-        precision = tp / max(1, tp + fp)
-        recall = tp / max(1, tp + fn)
-        f1 = 2 * precision * recall / max(1e-8, precision + recall)
+        # ============================================================
+        # ✅ GIỐNG PAPER: Reward = combination of accuracy and FPR
+        # Paper: "Reward rt: A combination of detection accuracy and false positive rate"
+        # ============================================================
+        accuracy = (tp + tn) / max(1, tp + fp + fn + tn)
         fpr = fp / max(1, fp + tn)
         
-        threshold_change_penalty = abs(threshold - old_threshold) * 0.1
-        reward = float(f1 + 0.5 * recall - self.fpr_penalty * fpr - threshold_change_penalty)
+        # ✅ Reward = accuracy - fpr_penalty * fpr (giống paper)
+        reward = float(accuracy - self.fpr_penalty * fpr)
         
         pos_step = self._calculate_pos_step(threshold, s, y)
         self.pos += pos_step
         
-        self.history.append(f1)
+        self.history.append(accuracy)
         if len(self.history) > self.memory_size:
             self.history.pop(0)
         if len(self.threshold_history) > self.memory_size:
@@ -235,8 +254,7 @@ class BatchThresholdEnvironment:
         next_state = self._state_for_current_batch() if not done else np.zeros(self.state_dim, dtype=np.float32)
         
         info = {
-            "f1": float(f1),
-            "recall": float(recall),
+            "accuracy": float(accuracy),
             "fpr": float(fpr),
             "threshold": float(threshold),
             "pos_step": int(pos_step),

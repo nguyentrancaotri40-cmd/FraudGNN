@@ -1,6 +1,9 @@
 # ============================================================
 # FILE: src/train/federated.py
 # Federated Learning with FedAvg for FraudGNN-RL
+# GIỐNG PAPER 100%: 
+#   - FedAvg với trọng số theo số lượng mẫu
+#   - Mỗi client có graph riêng
 # ============================================================
 
 from __future__ import annotations
@@ -13,12 +16,13 @@ import torch.nn as nn
 import numpy as np
 from collections import OrderedDict
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
 class FederatedClient:
-    """Client for federated learning."""
+    """Client for federated learning - Mỗi client có graph riêng."""
     
     def __init__(
         self,
@@ -31,11 +35,8 @@ class FederatedClient:
         self.client_id = client_id
         self.data = data
         self.cfg = copy.deepcopy(cfg)
-        
-        # ✅ FIX: Luôn dùng device được truyền vào
-        # Không tự động chuyển sang cuda để đảm bảo tất cả clients và server cùng device
         self.device = device
-        print(f"[Federated] Client {client_id} on {self.device}")
+        print(f"[Federated] Client {client_id} on {self.device} with {data.x.size(0)} nodes")
         
         model_cfg = cfg.get("model", {})
         self.model = model_class(
@@ -46,18 +47,22 @@ class FederatedClient:
             dropout=float(model_cfg.get("dropout", 0.2)),
         ).to(self.device)
         
-        # ✅ Không khởi tạo optimizer ở đây
+        # ✅ Lưu số lượng mẫu để tính trọng số
+        self.num_samples = data.x.size(0)
         self.optimizer = None
     
     def set_weights(self, weights: OrderedDict):
         """Set model weights from global model."""
         self.model.load_state_dict(weights)
-        # ✅ Reset optimizer khi nhận weights mới
         self.optimizer = None
     
     def get_weights(self) -> OrderedDict:
         """Get model weights for aggregation."""
         return self.model.state_dict()
+    
+    def get_num_samples(self) -> int:
+        """✅ Get number of samples for weighted aggregation."""
+        return self.num_samples
     
     def local_update(
         self,
@@ -76,7 +81,6 @@ class FederatedClient:
         device = self.device
         data = self.data.to(device)
         
-        # ✅ Tạo optimizer MỚI mỗi round (đúng FedAvg)
         self.optimizer = torch.optim.Adam(
             self.model.parameters(),
             lr=lr,
@@ -155,7 +159,6 @@ class FederatedClient:
             total_loss += epoch_loss
             total_batches += epoch_batches
         
-        # ✅ Tính avg_loss chính xác
         avg_loss = total_loss / max(1, total_batches) if total_batches > 0 else 0.0
         
         # ============================================================
@@ -178,6 +181,7 @@ class FederatedClient:
             "auc_pr": metrics.get("auc_pr", 0.0),
             "f1": metrics.get("f1", 0.0),
             "num_batches": total_batches,
+            "num_samples": self.num_samples,
         }
     
     def evaluate(self, data) -> Dict[str, float]:
@@ -229,20 +233,31 @@ class FederatedServer:
             raise ValueError(f"Unknown aggregation method: {method}")
     
     def _fedavg_aggregate(self, clients: List[FederatedClient]) -> OrderedDict:
-        """FedAvg: weighted average of client models."""
+        """
+        ✅ GIỐNG PAPER: FedAvg với trọng số theo số lượng mẫu.
+        
+        Công thức: θ_t = Σ (n_i / n_total) * θ_i
+        Trong đó n_i là số lượng mẫu của client i.
+        """
+        total_samples = sum(client.get_num_samples() for client in clients)
         avg_weights = OrderedDict()
-        num_clients = len(clients)
         
         for key in self.global_weights.keys():
             avg_weights[key] = torch.zeros_like(self.global_weights[key], dtype=torch.float32)
         
         for client in clients:
             client_weights = client.get_weights()
+            weight_ratio = client.get_num_samples() / total_samples
+            
             for key in avg_weights.keys():
-                avg_weights[key] += client_weights[key].float() / num_clients
+                avg_weights[key] += client_weights[key].float() * weight_ratio
         
         self.global_weights = avg_weights
         self.global_model.load_state_dict(avg_weights)
+        
+        print(f"[Federated] Aggregated {len(clients)} clients with {total_samples} total samples")
+        for client in clients:
+            print(f"  Client {client.client_id}: {client.get_num_samples():,} samples ({client.get_num_samples()/total_samples*100:.1f}%)")
         
         return avg_weights
     
@@ -368,6 +383,189 @@ class FederatedServer:
         }
 
 
+def load_client_graph(client_id: int, data_dir: str) -> Any:
+    """
+    ✅ Load graph riêng cho từng client từ file.
+    """
+    from src.graph.build_graph import load_graph
+    
+    graph_path = Path(data_dir) / f"client_{client_id}_graph.pkl"
+    if graph_path.exists():
+        return load_graph(str(graph_path))
+    return None
+
+
+def save_client_graph(graph, client_id: int, data_dir: str) -> None:
+    """
+    ✅ Lưu graph riêng cho từng client.
+    """
+    from src.graph.build_graph import save_graph
+    
+    graph_path = Path(data_dir) / f"client_{client_id}_graph.pkl"
+    graph_path.parent.mkdir(parents=True, exist_ok=True)
+    save_graph(graph, str(graph_path))
+
+
+def create_federated_clients_from_raw_data(
+    raw_data_dir: str,
+    cfg: Dict[str, Any],
+    model_class: nn.Module,
+    num_clients: int = 3,
+    device: str = "cpu",
+) -> List[FederatedClient]:
+    """
+    ✅ GIỐNG PAPER 100%: Mỗi client có graph riêng từ dữ liệu riêng.
+    
+    Cách 1: Load từ các file riêng biệt (mỗi client có dataset riêng)
+    """
+    from src.data.load_data import load_dataset
+    from src.data.preprocess import FraudPreprocessor
+    from src.graph.build_graph import build_transaction_graph
+    from src.graph.hybrid_graph import build_hybrid_transaction_graph
+    
+    clients = []
+    
+    for client_id in range(num_clients):
+        client_csv = Path(raw_data_dir) / f"client_{client_id}.csv"
+        
+        if client_csv.exists():
+            print(f"[Federated] Loading client {client_id} from: {client_csv}")
+            client_cfg = copy.deepcopy(cfg)
+            client_cfg["dataset"]["path"] = str(client_csv)
+            df = load_dataset(client_cfg)
+            
+            pre = FraudPreprocessor(client_cfg)
+            x, y, t = pre.fit_transform(df)
+            
+            flags = cfg.get("flags", {})
+            use_hybrid = flags.get("hybrid_graph", False)
+            
+            if use_hybrid:
+                graph = build_hybrid_transaction_graph(x, y, t, client_cfg)
+            else:
+                graph = build_transaction_graph(x, y, t, client_cfg)
+            
+            client = FederatedClient(
+                client_id=client_id,
+                data=graph,
+                cfg=cfg,
+                model_class=model_class,
+                device=device,
+            )
+            clients.append(client)
+    
+    return clients
+
+
+def create_federated_clients_from_different_datasets(
+    dataset_paths: List[str],
+    cfg: Dict[str, Any],
+    model_class: nn.Module,
+    device: str = "cpu",
+) -> List[FederatedClient]:
+    """
+    ✅ GIỐNG PAPER 100%: Mỗi client có graph riêng từ dataset khác nhau.
+    
+    Args:
+        dataset_paths: List of paths to different datasets
+        Ví dụ: ["data/raw/paysim.csv", "data/raw/creditcard.csv", "data/raw/ieee_cis.csv"]
+    """
+    from src.data.load_data import load_dataset
+    from src.data.preprocess import FraudPreprocessor
+    from src.graph.build_graph import build_transaction_graph
+    from src.graph.hybrid_graph import build_hybrid_transaction_graph
+    
+    clients = []
+    
+    for client_id, dataset_path in enumerate(dataset_paths):
+        print(f"[Federated] Client {client_id} loading dataset: {dataset_path}")
+        
+        client_cfg = copy.deepcopy(cfg)
+        client_cfg["dataset"]["path"] = dataset_path
+        df = load_dataset(client_cfg)
+        
+        pre = FraudPreprocessor(client_cfg)
+        x, y, t = pre.fit_transform(df)
+        
+        flags = cfg.get("flags", {})
+        use_hybrid = flags.get("hybrid_graph", False)
+        
+        if use_hybrid:
+            graph = build_hybrid_transaction_graph(x, y, t, client_cfg)
+        else:
+            graph = build_transaction_graph(x, y, t, client_cfg)
+        
+        client = FederatedClient(
+            client_id=client_id,
+            data=graph,
+            cfg=cfg,
+            model_class=model_class,
+            device=device,
+        )
+        clients.append(client)
+    
+    return clients
+
+
+def create_federated_clients_from_single_dataset(
+    cfg: Dict[str, Any],
+    model_class: nn.Module,
+    num_clients: int = 3,
+    device: str = "cpu",
+) -> List[FederatedClient]:
+    """
+    ✅ GIỐNG PAPER HƠN: Mỗi client có graph riêng bằng cách chia dữ liệu theo thời gian.
+    
+    Paper yêu cầu mỗi tổ chức có dữ liệu riêng.
+    Cách này mô phỏng bằng cách chia dữ liệu theo thời gian (temporal split).
+    """
+    from src.data.load_data import load_dataset
+    from src.data.preprocess import FraudPreprocessor
+    from src.graph.build_graph import build_transaction_graph
+    from src.graph.hybrid_graph import build_hybrid_transaction_graph
+    
+    clients = []
+    
+    df = load_dataset(cfg)
+    time_col = cfg["dataset"].get("time_col")
+    
+    if time_col and time_col in df.columns:
+        df = df.sort_values(time_col).reset_index(drop=True)
+        n = len(df)
+        shard_size = n // num_clients
+        
+        for client_id in range(num_clients):
+            start = client_id * shard_size
+            end = start + shard_size if client_id < num_clients - 1 else n
+            
+            client_df = df.iloc[start:end].copy()
+            
+            print(f"[Federated] Client {client_id}: {len(client_df)} samples "
+                  f"(time {start} to {end})")
+            
+            pre = FraudPreprocessor(cfg)
+            x, y, t = pre.fit_transform(client_df)
+            
+            flags = cfg.get("flags", {})
+            use_hybrid = flags.get("hybrid_graph", False)
+            
+            if use_hybrid:
+                graph = build_hybrid_transaction_graph(x, y, t, cfg)
+            else:
+                graph = build_transaction_graph(x, y, t, cfg)
+            
+            client = FederatedClient(
+                client_id=client_id,
+                data=graph,
+                cfg=cfg,
+                model_class=model_class,
+                device=device,
+            )
+            clients.append(client)
+    
+    return clients
+
+
 def create_federated_clients(
     data,
     cfg: Dict[str, Any],
@@ -375,40 +573,44 @@ def create_federated_clients(
     num_clients: int = 3,
     device: str = "cpu",
 ) -> List[FederatedClient]:
-    """Create federated clients by splitting data into shards."""
-    import numpy as np
-    import torch
+    """
+    ✅ GIỐNG PAPER 100%: Mỗi client có graph riêng.
     
-    # ✅ FIX: Strip hybrid_summary trước khi sharding
-    if hasattr(data, "hybrid_summary"):
-        print(f"[Federated] Removing hybrid_summary before sharding")
-        delattr(data, "hybrid_summary")
+    Priority:
+    1. Load từ các file riêng (client_0.csv, client_1.csv, ...)
+    2. Load từ các dataset khác nhau
+    3. Fallback: tách dữ liệu theo thời gian
+    """
+    raw_data_dir = cfg.get("dataset", {}).get("path", "data/raw")
     
-    clients = []
+    clients = create_federated_clients_from_raw_data(
+        Path(raw_data_dir).parent,
+        cfg,
+        model_class,
+        num_clients,
+        device
+    )
     
-    num_nodes = data.x.size(0)
-    indices = np.random.permutation(num_nodes)
-    shard_size = num_nodes // num_clients
+    if clients:
+        return clients
     
-    for client_id in range(num_clients):
-        start = client_id * shard_size
-        end = start + shard_size if client_id < num_clients - 1 else num_nodes
-        client_indices = indices[start:end]
-        
-        client_indices_tensor = torch.tensor(client_indices, dtype=torch.long)
-        client_data = data.subgraph(client_indices_tensor)
-        
-        client = FederatedClient(
-            client_id=client_id,
-            data=client_data,
-            cfg=copy.deepcopy(cfg),
-            model_class=model_class,
-            device=device,  # ✅ Truyền device từ tham số
+    dataset_paths = cfg.get("federated", {}).get("dataset_paths", [])
+    if dataset_paths:
+        clients = create_federated_clients_from_different_datasets(
+            dataset_paths,
+            cfg,
+            model_class,
+            device
         )
-        clients.append(client)
-        print(f"[Federated] Created client {client_id}: {len(client_indices)} nodes")
+        if clients:
+            return clients
     
-    return clients
+    return create_federated_clients_from_single_dataset(
+        cfg,
+        model_class,
+        num_clients,
+        device
+    )
 
 
 def train_federated(
@@ -438,7 +640,7 @@ def train_federated(
         cfg=cfg,
         model_class=model_class,
         num_clients=num_clients,
-        device=device,  # ✅ Truyền device
+        device=device,
     )
     
     model_cfg = cfg.get("model", {})
@@ -451,7 +653,7 @@ def train_federated(
             "num_node_types": int(model_cfg.get("num_node_types", 1)),
             "dropout": float(model_cfg.get("dropout", 0.2)),
         },
-        device=device,  # ✅ Truyền device
+        device=device,
     )
     
     result = server.federated_training(
