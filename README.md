@@ -288,7 +288,7 @@ Project tính:
 
 ---
 
-# 🧪 Kiểm tra nhanh
+# Kiểm tra nhanh
 
 ## Unit tests
 
