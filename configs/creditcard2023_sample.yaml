@@ -1,5 +1,5 @@
 # ============================================================
-# CONFIG: IEEE-CIS - TEST NHANH (GIỐNG PAPER)
+# CONFIG: CreditCard2023 - TEST NHANH (GIỐNG PAPER)
 # ============================================================
 # ✅ Giống paper 100% về:
 #   - Temporal split (70-15-15)
@@ -7,7 +7,7 @@
 #   - epochs (100)
 #   - max_neighbors_per_node (3)
 #   - hidden_dim (64), num_layers (3)
-#   - similarity_threshold (0.99)
+#   - similarity_threshold (0.98)
 #
 # ⚠️ Chỉ khác paper:
 #   - sample_frac: 0.1 (chỉ 10% data để chạy nhanh)
@@ -26,15 +26,15 @@ flags:
   pruning: false
 
 experiment:
-  name: ieee_cis_sample_10pct
+  name: creditcard_sample_10pct
   pipeline: fraudgnn_rl
-  dataset: ieee
+  dataset: creditcard
 
 dataset:
-  name: IEEE-CIS
-  path: data/raw/ieee_cis_fast.csv
-  label_col: isFraud
-  time_col: time_idx
+  name: CreditCard2023
+  path: data/raw/creditcard_2023_fast.csv
+  label_col: Class
+  time_col: id
   time_unit: index
   sample_frac: 0.1         # ✅ 10% DATA - CHỈ ĐỂ TEST
   random_state: 42
@@ -46,87 +46,14 @@ split:
 
 preprocess:
   drop_cols:
-    - time_idx
-    - TransactionID
-    - TransactionDT
-    - card1
-    - card2
-    - card3
-    - card4
-    - card5
-    - card6
-    - addr1
-    - addr2
-    - P_emaildomain
-    - R_emaildomain
-    - id_01
-    - id_02
-    - id_03
-    - id_04
-    - id_05
-    - id_06
-    - id_07
-    - id_08
-    - id_09
-    - id_10
-    - id_11
-    - id_12
-    - id_13
-    - id_14
-    - id_15
-    - id_16
-    - id_17
-    - id_18
-    - id_19
-    - id_20
-    - id_21
-    - id_22
-    - id_23
-    - id_24
-    - id_25
-    - id_26
-    - id_27
-    - id_28
-    - id_29
-    - id_30
-    - id_31
-    - id_32
-    - id_33
-    - id_34
-    - id_35
-    - id_36
-    - id_37
-    - id_38
-    - id_39
-    - id_40
-    - id_41
-    - id_42
-    - id_43
-    - id_44
-    - id_45
-    - id_46
-    - id_47
-    - id_48
-    - id_49
-    - id_50
-    - M1
-    - M2
-    - M3
-    - M4
-    - M5
-    - M6
-    - M7
-    - M8
-    - M9
-  categorical_cols:
-    - ProductCD
+    - id
+  categorical_cols: []
   numeric_strategy: median
-  categorical_strategy: unknown
 
 graph:
   type: transaction_similarity
-  time_window_hours: 50.0
-  similarity_threshold: 0.99       # ✅ GIỐNG PAPER
+  time_window_hours: 1000.0
+  similarity_threshold: 0.98       # ✅ GIỐNG PAPER
   max_neighbors_per_node: 3        # ✅ GIỐNG PAPER
   add_self_loops: true
 
@@ -145,8 +72,8 @@ train:
 
 rl:
   enabled: true
-  threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60]
-  fpr_penalty: 0.3
+  threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50]
+  fpr_penalty: 0.5
   epochs: 100                      # ✅ GIỐNG PAPER
   batch_size: 256                  # ✅ GIỐNG PAPER
 

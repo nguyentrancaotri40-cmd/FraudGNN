@@ -1,5 +1,19 @@
 # ============================================================
-# CONFIG: PaySim - BASELINE (NHẸ) 
+# CONFIG: PaySim - TEST NHANH (GIỐNG PAPER)
+# ============================================================
+# ✅ Giống paper 100% về:
+#   - Temporal split (70-15-15)
+#   - batch_size (64 / 256)
+#   - epochs (100)
+#   - max_neighbors_per_node (3)
+#   - hidden_dim (64), num_layers (3)
+#   - similarity_threshold (0.9)
+#
+# ⚠️ Chỉ khác paper:
+#   - sample_frac: 0.1 (chỉ 10% data để chạy nhanh)
+#   - federated.rounds: 5 (giảm để test)
+#   - federated.local_epochs: 2 (giảm để test)
+#   - patience: 5 (giảm để test)
 # ============================================================
 
 flags:
@@ -7,12 +21,12 @@ flags:
   soft_edges: false
   hybrid_graph: false
   weighted_fusion: false
-  federated: true
+  federated: true          # ✅ GIỐNG PAPER
   dqn: true
   pruning: false
 
 experiment:
-  name: paysim_baseline_light
+  name: paysim_sample_10pct
   pipeline: fraudgnn_rl
   dataset: paysim
 
@@ -22,11 +36,11 @@ dataset:
   label_col: isFraud
   time_col: step
   time_unit: hour
-  sample_frac: 0.5                    # ✅ CHỈ 50% DỮ LIỆU (6.36M → 3.18M)
+  sample_frac: 0.1         # ✅ 10% DATA - CHỈ ĐỂ TEST
   random_state: 42
 
 split:
-  strategy: stratified_random
+  strategy: temporal       # ✅ GIỐNG PAPER
   train_ratio: 0.70
   val_ratio: 0.15
 
@@ -42,20 +56,20 @@ preprocess:
 graph:
   type: transaction_similarity
   time_window_hours: 1.0
-  similarity_threshold: 0.99
-  max_neighbors_per_node: 2              # ✅ GIẢM TỪ 3 XUỐNG 2
+  similarity_threshold: 0.9         # ✅ GIỐNG PAPER
+  max_neighbors_per_node: 3         # ✅ GIỐNG PAPER
   add_self_loops: true
 
 model:
-  hidden_dim: 64
-  num_layers: 3
+  hidden_dim: 64                    # ✅ GIỐNG PAPER
+  num_layers: 3                     # ✅ GIỐNG PAPER
   dropout: 0.20
   num_node_types: 1
 
 train:
-  epochs: 30                            
-  patience: 5
-  batch_size: 64
+  epochs: 100                       # ✅ GIỐNG PAPER
+  patience: 5                       # ⚠️ Giảm để test
+  batch_size: 64                    # ✅ GIỐNG PAPER
   learning_rate: 0.001
   weight_decay: 0.0001
 
@@ -63,15 +77,15 @@ rl:
   enabled: true
   threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
   fpr_penalty: 0.5
-  epochs: 30                            
-  batch_size: 256
+  epochs: 100                       # ✅ GIỐNG PAPER
+  batch_size: 256                   # ✅ GIỐNG PAPER
 
 federated:
   num_clients: 3
-  rounds: 5                               # ✅ GIẢM TỪ 10 XUỐNG 5
-  local_epochs: 3                         # ✅ GIẢM TỪ 5 XUỐNG 3
+  rounds: 5                         # ⚠️ Giảm để test
+  local_epochs: 2                   # ⚠️ Giảm để test
   learning_rate: 0.001
-  batch_size: 64
+  batch_size: 64                    # ✅ GIỐNG PAPER
   aggregation: fedavg
 
 threshold_selection:

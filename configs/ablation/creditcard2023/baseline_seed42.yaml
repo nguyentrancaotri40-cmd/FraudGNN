@@ -57,7 +57,7 @@ rl:
   - 0.45
   - 0.5
 split:
-  strategy: stratified_random
+  strategy: temporal
   train_ratio: 0.7
   val_ratio: 0.15
 threshold_selection:

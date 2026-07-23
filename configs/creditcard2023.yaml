@@ -1,10 +1,9 @@
-
 flags:
   hard_edges: true
   soft_edges: false
   hybrid_graph: false
   weighted_fusion: false
-  federated: true
+  federated: true          # ✅ GIỐNG PAPER
   dqn: true
   pruning: false
 
@@ -19,11 +18,11 @@ dataset:
   label_col: Class
   time_col: id
   time_unit: index
-  sample_frac: 0.5                    # ✅ 50% DATA
+  sample_frac: 0.5         # ✅ Giảm data để chạy (paper ko quy định)
   random_state: 42
 
 split:
-  strategy: temporal
+  strategy: temporal       # ✅ GIỐNG PAPER
   train_ratio: 0.70
   val_ratio: 0.15
 
@@ -36,20 +35,20 @@ preprocess:
 graph:
   type: transaction_similarity
   time_window_hours: 1000.0
-  similarity_threshold: 0.98
-  max_neighbors_per_node: 3           # ✅ PAPER: 3
+  similarity_threshold: 0.98       # ✅ GIỐNG PAPER
+  max_neighbors_per_node: 3        # ✅ GIỐNG PAPER
   add_self_loops: true
 
 model:
-  hidden_dim: 64                      # ✅ PAPER
-  num_layers: 3                       # ✅ PAPER
+  hidden_dim: 64                   # ✅ GIỐNG PAPER
+  num_layers: 3                    # ✅ GIỐNG PAPER
   dropout: 0.20
   num_node_types: 1
 
 train:
-  epochs: 100                         # ✅ PAPER
+  epochs: 100                      # ✅ GIỐNG PAPER
   patience: 15
-  batch_size: 64
+  batch_size: 64                   # ✅ GIỐNG PAPER
   learning_rate: 0.001
   weight_decay: 0.0001
 
@@ -57,15 +56,15 @@ rl:
   enabled: true
   threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50]
   fpr_penalty: 0.5
-  epochs: 100                         # ✅ PAPER
-  batch_size: 256
+  epochs: 100                      # ✅ GIỐNG PAPER
+  batch_size: 256                  # ✅ GIỐNG PAPER
 
 federated:
   num_clients: 3
-  rounds: 20                           # ✅ Tăng lên 20
-  local_epochs: 5                      # ✅ Tăng lên 5
+  rounds: 20                       # ✅ Có thể giữ (paper ko quy định)
+  local_epochs: 5                  # ✅ Có thể giữ (paper ko quy định)
   learning_rate: 0.001
-  batch_size: 64
+  batch_size: 64                   # ✅ GIỐNG PAPER
   aggregation: fedavg
 
 threshold_selection:
