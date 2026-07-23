@@ -7,11 +7,11 @@ Project này dựng lại pipeline **FraudGNN-RL** dựa trên mô tả trong pa
 
 ---
 
-# 📌 Lưu ý khoa học quan trọng
+# Lưu ý khoa học quan trọng
 
 Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy project này là bản **reproduction from paper description**, tức là tái hiện gần nhất có thể theo thuật toán và thông số được mô tả.
 
-✅ **Code đã được tối ưu để giống paper 100%** về:
+**Code đã được tối ưu để giống paper 100%** về:
 
 - **Temporal GRU** (Eq 6-7): GRU layer xử lý tuần tự trên toàn bộ chuỗi giao dịch
 - **RL State** (Section IV-B): State = graph embedding từ TSSGC
@@ -22,7 +22,7 @@ Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy proj
 
 ---
 
-# 🏗️ Các điểm bám sát paper
+# Các điểm bám sát paper
 
 - Dữ liệu giao dịch được biến thành **transaction graph** (theo implementation của paper ở Section V-A-4).
 - Node là transaction trong graph similarity-time.
@@ -71,13 +71,13 @@ FRAUDGNN/
 │   │   └── graph_utils.py           # Utils (vectorized hard edges)
 │   ├── models/                      # Models
 │   │   ├── fraudgnn_rl.py           # Main model
-│   │   ├── tssgc.py                 # TSSGC encoder (✅ Temporal GRU fix)
+│   │   ├── tssgc.py                 # TSSGC encoder (Temporal GRU fix)
 │   │   ├── classifier.py            # Fraud classifier
-│   │   ├── dqn_agent.py             # DQN agent (✅ Vanilla DQN + Reward fix)
+│   │   ├── dqn_agent.py             # DQN agent (Vanilla DQN + Reward fix)
 │   │   └── naf_agent.py             # NAF agent (continuous)
 │   ├── train/                       # Training logic
 │   │   ├── pipeline_fraudgnn.py     # Main pipeline (entry point)
-│   │   ├── federated.py             # Federated Learning (✅ FedAvg weighted)
+│   │   ├── federated.py             # Federated Learning (FedAvg weighted)
 │   │   ├── train_gnn.py             # TSSGC training
 │   │   └── train_rl.py              # RL training (DQN/NAF)
 │   ├── eval/                        # Evaluation
@@ -150,7 +150,7 @@ Lưu ý: Nếu torch-geometric bị lỗi, cài theo hướng dẫn chính thứ
 
 ---
 
-# 📊 Chuẩn bị dữ liệu
+# Chuẩn bị dữ liệu
 
 Đặt file dataset vào `data/raw/` và sửa đường dẫn trong file config.
 
@@ -192,7 +192,7 @@ Config:
 configs/ieee_cis.yaml
 ```
 
-# 🚀 Chạy reproduction
+# Chạy reproduction
 
 ## Baseline (FraudGNN-RL)
 
@@ -236,7 +236,7 @@ outputs/checkpoints/dqn_threshold_agent.pt
 
 ---
 
-# 🔄 Pipeline
+# Pipeline
 
 ```text
 Raw Transaction Data
@@ -250,17 +250,17 @@ Transaction Graph Construction
    └── Soft Edges (hybrid)
         ↓
 TSSGC Encoder
-   ├── Temporal Modeling (GRU + time decay) ✅ Giống paper Eq 6-7
-   ├── Spatial Modeling (GAT) ✅ Giống paper Eq 8-9
-   └── Semantic Modeling (type embedding) ✅ Giống paper Eq 10
+   ├── Temporal Modeling (GRU + time decay) Giống paper Eq 6-7
+   ├── Spatial Modeling (GAT) Giống paper Eq 8-9
+   └── Semantic Modeling (type embedding) Giống paper Eq 10
         ↓
 Classifier Head
         ↓
 Fraud Score
         ↓
-RL Agent (Vanilla DQN / NAF) ✅ Giống paper Eq 12
-   ├── State = Graph embedding từ TSSGC ✅ Giống paper Section IV-B
-   ├── Reward = Accuracy + FPR ✅ Giống paper
+RL Agent (Vanilla DQN / NAF) Giống paper Eq 12
+   ├── State = Graph embedding từ TSSGC Giống paper Section IV-B
+   ├── Reward = Accuracy + FPR Giống paper
    └── Threshold Adjustment
         ↓
 Fraud / Legitimate Prediction
@@ -270,7 +270,7 @@ Evaluation
 
 ---
 
-# 📈 Metrics
+# Metrics
 
 Project tính:
 
@@ -310,7 +310,7 @@ python -m src.main_pipeline --config configs/test.yaml
 
 ---
 
-# ⚠️ Giới hạn của bản reproduction
+# Giới hạn của bản reproduction
 
 Do tác giả chưa public source code, một số chi tiết phải diễn giải kỹ thuật:
 
@@ -351,7 +351,7 @@ flags:
 
 ---
 
-# 📝 Cấu hình chính
+# Cấu hình chính
 
 ## Flags
 
@@ -376,7 +376,7 @@ flags:
 
 ---
 
-# 📚 Tham khảo
+# Tham khảo
 
 Paper: FraudGNN-RL: A Graph Neural Network With Reinforcement Learning for Adaptive Financial Fraud Detection
 
@@ -384,7 +384,7 @@ IEEE JOCS 2025
 
 ---
 
-# 📄 License
+# License
 
 MIT License
 
