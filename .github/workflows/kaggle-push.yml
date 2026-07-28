@@ -27,29 +27,21 @@ jobs:
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KAGGLE_CONFIG_DIR: ${{ runner.temp }}/.kaggle
         run: |
-          # Kiểm tra secrets
+          set -e
           if [ -z "$KAGGLE_USERNAME" ] || [ -z "$KAGGLE_API_TOKEN" ]; then
             echo "❌ Kaggle secrets are not set."
             exit 1
           fi
-          
-          # Tạo thư mục cấu hình trong runner.temp
-          KAGGLE_CONFIG_DIR="${{ runner.temp }}/.kaggle"
           mkdir -p "$KAGGLE_CONFIG_DIR"
-          
-          # Tạo file kaggle.json
-          cat > "$KAGGLE_CONFIG_DIR/kaggle.json" <<EOF
-          {"username":"$KAGGLE_USERNAME","key":"$KAGGLE_API_TOKEN"}
-          EOF
+          echo "{\"username\":\"$KAGGLE_USERNAME\",\"key\":\"$KAGGLE_API_TOKEN\"}" > "$KAGGLE_CONFIG_DIR/kaggle.json"
           chmod 600 "$KAGGLE_CONFIG_DIR/kaggle.json"
-          
-          # Lưu đường dẫn vào biến môi trường cho các step sau
+          export KAGGLE_CONFIG_DIR="$KAGGLE_CONFIG_DIR"
           echo "KAGGLE_CONFIG_DIR=$KAGGLE_CONFIG_DIR" >> $GITHUB_ENV
-          
           echo "🔑 Kaggle config created. Username: $KAGGLE_USERNAME"
-          
-          # Kiểm tra xác thực
+          echo "Using config dir: $KAGGLE_CONFIG_DIR"
+          ls -la "$KAGGLE_CONFIG_DIR"
           echo "🔑 Testing authentication..."
           if ! kaggle kernels list --user "$KAGGLE_USERNAME" --page-size 1 > /dev/null 2>&1; then
             echo "❌ Kaggle authentication failed. Please check your API token."
@@ -60,19 +52,15 @@ jobs:
           
       - name: Push to Kaggle
         run: |
-          # Kiểm tra file metadata
           if [ ! -f kernel-metadata.json ]; then
             echo "❌ kernel-metadata.json not found."
             ls -la
             exit 1
           fi
-          
           echo "📄 Kernel metadata:"
           jq -r '.id, .title' kernel-metadata.json
-          
           echo "🚀 Pushing to Kaggle..."
           kaggle kernels push -p ./
-          
           if [ $? -eq 0 ]; then
             echo "✅ Successfully pushed to Kaggle!"
           else
