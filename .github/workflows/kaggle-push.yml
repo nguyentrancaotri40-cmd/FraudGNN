@@ -54,7 +54,7 @@ jobs:
           echo "📄 Kernel metadata:"
           jq -r '.id, .title' kernel-metadata.json
           echo "🚀 Pushing to Kaggle..."
-          kaggle kernels push -p ./ --quiet
+          kaggle kernels push -p ./
           if [ $? -eq 0 ]; then
             echo "✅ Successfully pushed to Kaggle!"
           else
