@@ -22,16 +22,16 @@ jobs:
       - name: Configure Kaggle (Safe version)
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
-          KAGGLE_KEY: ${{ secrets.KAGGLE_API_TOKEN }}
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
           KAGGLE_CONFIG_DIR: ${{ runner.temp }}/.kaggle
         run: |
-          if [ -z "$KAGGLE_USERNAME" ] || [ -z "$KAGGLE_KEY" ]; then
+          if [ -z "$KAGGLE_USERNAME" ] || [ -z "$KAGGLE_API_TOKEN" ]; then
             echo "❌ Kaggle secrets are not set."
             exit 1
           fi
           mkdir -p "$KAGGLE_CONFIG_DIR"
           cat > "$KAGGLE_CONFIG_DIR/kaggle.json" <<EOF
-          {"username":"$KAGGLE_USERNAME","key":"$KAGGLE_KEY"}
+          {"username":"$KAGGLE_USERNAME","key":"$KAGGLE_API_TOKEN"}
           EOF
           chmod 600 "$KAGGLE_CONFIG_DIR/kaggle.json"
           echo "KAGGLE_CONFIG_DIR=$KAGGLE_CONFIG_DIR" >> $GITHUB_ENV

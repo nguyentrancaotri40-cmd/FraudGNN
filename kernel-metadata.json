@@ -1,6 +1,6 @@
 {
   "id": "nguyntrncaotr/fraudgnn-rl",
-  "title": "FraudGNN Credit Card 2023",
+  "title": "FraudGNN-RL For Reproduction",
   "code_file": "fraudgnn-rl.ipynb",
   "language": "python",
   "kernel_type": "notebook",
