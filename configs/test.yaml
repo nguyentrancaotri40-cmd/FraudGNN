@@ -1,11 +1,32 @@
+# ============================================================
+# CONFIG: TEST - CHẠY NHANH (GIỐNG PAPER)
+# ============================================================
+# ✅ Giống paper 100% về methodology:
+#   - Temporal split (70-15-15)
+#   - batch_size (64 / 256)
+#   - max_neighbors_per_node (3)
+#   - hidden_dim (64), num_layers (3)
+#   - similarity_threshold (0.9)
+#   - Stratified random sampling
+#   - Federated Learning (bật)
+#
+# ⚠️ Chỉ khác paper để test nhanh:
+#   - sample_frac: 0.01 (1% data)
+#   - epochs: 1 (chỉ 1 epoch)
+#   - patience: 1
+#   - rl.epochs: 1
+#   - federated.rounds: 1
+#   - federated.local_epochs: 1
+# ============================================================
+
 flags:
   hard_edges: true
-  soft_edges: false
-  hybrid_graph: false
-  weighted_fusion: false
-  federated: false
+  soft_edges: true
+  hybrid_graph: true
+  weighted_fusion: true
+  federated: true              # ✅ GIỐNG PAPER (bật FL)
   dqn: true
-  pruning: false
+  pruning: true
 
 experiment:
   name: test
@@ -18,11 +39,12 @@ dataset:
   label_col: isFraud
   time_col: step
   time_unit: hour
-  sample_frac: 0.01
+  sample_frac: 0.01            # ⚠️ 1% data để test nhanh
+  stratified_sampling: true    # ✅ GIỐNG PAPER
   random_state: 42
 
 split:
-  strategy: temporal
+  strategy: temporal           # ✅ GIỐNG PAPER
   train_ratio: 0.70
   val_ratio: 0.15
 
@@ -38,26 +60,45 @@ preprocess:
 graph:
   type: transaction_similarity
   time_window_hours: 1.0
-  similarity_threshold: 0.99
-  max_neighbors_per_node: 2
+  similarity_threshold: 0.9    # ✅ GIỐNG PAPER (0.9)
+  max_neighbors_per_node: 3    # ✅ GIỐNG PAPER (3)
   add_self_loops: true
 
 model:
-  hidden_dim: 64
-  num_layers: 3
+  hidden_dim: 64               # ✅ GIỐNG PAPER
+  num_layers: 3                # ✅ GIỐNG PAPER
   dropout: 0.20
   num_node_types: 1
 
 train:
-  epochs: 1
-  patience: 1
-  batch_size: 64
+  epochs: 1                    # ⚠️ Test nhanh (paper: 100)
+  patience: 1                  # ⚠️ Test nhanh
+  batch_size: 64               # ✅ GIỐNG PAPER
   learning_rate: 0.001
   weight_decay: 0.0001
 
 rl:
   enabled: true
-  threshold_bins: [0.3, 0.5, 0.7]
+  threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]  # ✅ GIỐNG PAPER
   fpr_penalty: 0.5
-  epochs: 1
-  batch_size: 256
+  epochs: 1                    # ⚠️ Test nhanh (paper: 100)
+  batch_size: 256              # ✅ GIỐNG PAPER
+
+federated:
+  num_clients: 3
+  rounds: 1                    # ⚠️ Test nhanh (paper: 20)
+  local_epochs: 1              # ⚠️ Test nhanh (paper: 5)
+  learning_rate: 0.001
+  batch_size: 64               # ✅ GIỐNG PAPER
+  aggregation: fedavg
+  align_graphs: true           # ✅ GIỐNG PAPER (Section IV.C)
+  alignment_method: feature_projection  # ✅ GIỐNG PAPER
+
+threshold_selection:
+  metric: custom
+  f1_weight: 1.0
+  recall_weight: 0.8
+  precision_weight: 0.1
+  fpr_weight: 0.5
+  max_fpr: 0.20
+  min_recall: 0.30

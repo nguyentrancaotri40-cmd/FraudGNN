@@ -70,4 +70,6 @@ federated:
   learning_rate: 0.001
   batch_size: 32
   aggregation: fedavg
+  align_graphs: true
+  alignment_method: feature_projection
   

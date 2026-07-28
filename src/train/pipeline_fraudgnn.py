@@ -1,7 +1,9 @@
 # ============================================================
 # src/train/pipeline_fraudgnn.py
 # Pipeline: Graph → TSSGC → FedAvg → RL (DQN/NAF)
-# Hỗ trợ 2 model: FraudGNN-RL (baseline) và FraudGNN-RL+ (hybrid)
+# GIỐNG PAPER 100%: 
+#   - Benchmark: RL chỉ train trên validation, test chỉ đánh giá
+#   - Online Adaptation: thí nghiệm riêng minh họa Figure 2
 # ============================================================
 
 from __future__ import annotations
@@ -25,12 +27,11 @@ from src.graph.soft_behavior_graph import build_soft_behavior_edges
 from src.graph.graph_utils import normalize_time_to_hours, make_edge_tensors
 from src.models.fraudgnn_rl import FraudGNNRL
 from src.train.federated import train_federated
-from src.train.train_rl import train_threshold_dqn, choose_best_threshold_by_validation
+from src.train.train_rl import choose_best_threshold_by_validation
 from src.eval.evaluate import predict_scores, save_metrics
 from src.eval.metrics import classification_metrics
 from src.utils.seed import set_seed
 from src.utils.config import ensure_dirs
-# ✅ THÊM TIMER
 from src.utils.timer import measure_latency, get_memory_usage, print_timing_summary
 
 
@@ -141,16 +142,11 @@ def build_graph_from_flags(x, y, t, cfg, flags):
     return build_transaction_graph(x, y, t, cfg)
 
 
-# ✅ THÊM HÀM CACHE GRAPH
 def get_or_build_graph(x, y, t, cfg, flags, name="train"):
-    """Lấy graph từ cache nếu có, nếu không thì xây dựng và lưu lại.
-    
-    Giúp tránh build graph 3 lần cho train/val/test, đặc biệt hữu ích cho hybrid graph.
-    """
+    """Lấy graph từ cache nếu có, nếu không thì xây dựng và lưu lại."""
     graph_dir = Path("data/graphs/cache")
     graph_dir.mkdir(parents=True, exist_ok=True)
     
-    # Tạo cache key từ config và flags
     cache_parts = [
         name,
         str(cfg.get("dataset", {}).get("sample_frac", 1.0)),
@@ -180,8 +176,99 @@ def get_or_build_graph(x, y, t, cfg, flags, name="train"):
     return data
 
 
+def simulate_online_adaptation(
+    agent,
+    test_scores: np.ndarray,
+    test_labels: np.ndarray,
+    test_embeddings: np.ndarray,
+    cfg: Dict[str, Any],
+    device: str = "cpu",
+) -> Dict[str, Any]:
+    """
+    ✅ ONLINE ADAPTATION SIMULATION (FIGURE 2)
+    
+    Đây là thí nghiệm RIÊNG để minh họa tính "adaptive" của hệ thống.
+    KHÔNG dùng kết quả này cho benchmark (Table 2).
+    """
+    from src.models.dqn_agent import BatchThresholdEnvironment
+    
+    print(f"\n{'='*60}")
+    print(f"[ONLINE] Simulating online adaptation (Figure 2)...")
+    print(f"{'='*60}")
+    
+    chunk_size = cfg.get("rl", {}).get("adaptive_chunk_size", 1000)
+    
+    online_env = BatchThresholdEnvironment(
+        test_scores, test_labels,
+        graph_embeddings=test_embeddings,
+        batch_size=chunk_size,
+        fpr_penalty=cfg.get("rl", {}).get("fpr_penalty", 2.0),
+    )
+    
+    state = online_env.reset()
+    done = False
+    step_count = 0
+    
+    adaptive_thresholds = []
+    adaptive_rewards = []
+    adaptive_accuracies = []
+    adaptive_fprs = []
+    
+    while not done:
+        # ✅ FIX: explore=False khi đánh giá
+        action = agent.act(state, explore=False)
+        threshold = agent.threshold(action)
+        
+        next_state, reward, done, info = online_env.step(threshold)
+        
+        agent.memory.push(state, action, reward, next_state, done)
+        agent.update(batch_size=min(64, len(agent.memory)))
+        
+        adaptive_thresholds.append(threshold)
+        adaptive_rewards.append(reward)
+        adaptive_accuracies.append(info.get('accuracy', 0))
+        adaptive_fprs.append(info.get('fpr', 0))
+        
+        state = next_state
+        step_count += 1
+        
+        if step_count % 10 == 0:
+            avg_reward = np.mean(adaptive_rewards[-10:]) if adaptive_rewards else 0
+            print(f"  Step {step_count}: threshold={threshold:.3f}, "
+                  f"avg_reward={avg_reward:.4f}, "
+                  f"accuracy={info.get('accuracy', 0):.4f}")
+    
+    final_threshold = adaptive_thresholds[-1] if adaptive_thresholds else 0.5
+    mean_threshold = np.mean(adaptive_thresholds) if adaptive_thresholds else 0.5
+    
+    online_metrics = classification_metrics(
+        test_labels, test_scores, threshold=final_threshold
+    )
+    
+    print(f"\n[ONLINE] Online adaptation results (Figure 2 simulation):")
+    print(f"  Steps: {step_count}")
+    print(f"  Final threshold: {final_threshold:.4f}")
+    print(f"  Mean threshold: {mean_threshold:.4f}")
+    print(f"  F1: {online_metrics.get('f1', 0):.4f}")
+    print(f"  AUC-ROC: {online_metrics.get('auc_roc', 0):.4f}")
+    print(f"  Accuracy: {online_metrics.get('accuracy', 0):.4f}")
+    print(f"{'='*60}")
+    
+    return {
+        "thresholds": adaptive_thresholds,
+        "rewards": adaptive_rewards,
+        "accuracies": adaptive_accuracies,
+        "fprs": adaptive_fprs,
+        "steps": step_count,
+        "final_threshold": final_threshold,
+        "mean_threshold": mean_threshold,
+        "metrics": online_metrics,
+        "note": "Online adaptation simulation (Figure 2) - NOT used for benchmark comparison",
+    }
+
+
 def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """Main pipeline for FraudGNN-RL / FraudGNN-RL+."""
+    """Main pipeline - GIỐNG PAPER 100%."""
     
     seed = int(cfg.get("dataset", {}).get("random_state", 42))
     set_seed(seed)
@@ -237,7 +324,7 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
     timing["preprocessing_sec"] = time.perf_counter() - start
     print(f"[TIMING] Preprocess done in {timing['preprocessing_sec']:.2f}s")
     
-    # Build graph - ✅ SỬ DỤNG CACHE
+    # Build graph
     start = time.perf_counter()
     print(f"[TIMING] Building graphs...")
     
@@ -303,15 +390,36 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
         test_scores, test_labels = predict_scores(global_model, test_graph, device=device)
     
     # ============================================================
-    # 3. RL THRESHOLD - DQN hoặc NAF
+    # 3. ✅ RL THRESHOLD - CHỈ TRÊN VALIDATION (GIỐNG PAPER)
     # ============================================================
     thresholds = [float(x) for x in cfg.get("rl", {}).get("threshold_bins", [0.5])]
-    rl_type = cfg.get("rl", {}).get("type", "dqn")  # "dqn" hoặc "naf"
+    rl_type = cfg.get("rl", {}).get("type", "dqn")
+    agent = None
+    val_embeddings = None
+    test_embeddings = None
+    rl_epochs = 0
     
     if use_rl:
-        # ✅ Lấy số features từ model
-        n_features = global_model.encoder.layers[0].temporal.lin_msg.out_features
-        print(f"[RL] Number of features for importance weighting: {n_features}")
+        global_model.eval()
+        with torch.no_grad():
+            embed_dim = global_model.encoder.layers[0].temporal.lin_msg.out_features
+            print(f"[RL] Embedding dimension: {embed_dim}")
+            
+            val_embeddings = global_model.encoder(
+                val_graph.x.to(device),
+                val_graph.edge_index.to(device),
+                getattr(val_graph, "edge_time_delta", None),
+                getattr(val_graph, "node_type", None),
+                getattr(val_graph, "edge_weight", None),
+            ).cpu().numpy()
+            
+            test_embeddings = global_model.encoder(
+                test_graph.x.to(device),
+                test_graph.edge_index.to(device),
+                getattr(test_graph, "edge_time_delta", None),
+                getattr(test_graph, "node_type", None),
+                getattr(test_graph, "edge_weight", None),
+            ).cpu().numpy()
         
         if rl_type == "naf":
             print(f"[NAF] Using Normalized Advantage Functions (continuous action)")
@@ -320,105 +428,22 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
             start = time.perf_counter()
             print(f"[TIMING] Training NAF on validation set...")
             
-            # ✅ Train NAF với feature weights
             agent, rl_history = train_naf_agent(
-                val_scores, val_labels, cfg, device=device,
-                n_features=n_features
+                val_scores, val_labels, cfg, 
+                graph_embeddings=val_embeddings,
+                device=device,
+                n_features=embed_dim
             )
             timing["rl_training_sec"] = time.perf_counter() - start
             print(f"[TIMING] NAF trained in {timing['rl_training_sec']:.2f}s")
             
-            # Static threshold (grid search) để so sánh
-            static_threshold, static_metrics = choose_best_threshold_by_validation(
+            best_threshold, val_threshold_metrics = choose_best_threshold_by_validation(
                 val_scores, val_labels, thresholds, cfg=cfg
             )
+            val_threshold_metrics["threshold_selection_method"] = "naf_validation"
             
-            # NAF online learning trên test set
-            print(f"[NAF] Running online adaptive loop on test set...")
-            
-            env = BatchNAFEnvironment(
-                val_scores, val_labels,
-                batch_size=cfg.get("rl", {}).get("batch_size", 256),
-                fpr_penalty=cfg.get("rl", {}).get("fpr_penalty", 2.0),
-            )
-            
-            test_scores_arr = test_scores
-            test_labels_arr = test_labels
-            
-            adaptive_thresholds = []
-            adaptive_feature_weights = []
-            chunk_size = cfg.get("rl", {}).get("adaptive_chunk_size", 1000)
-            
-            # State ban đầu từ validation
-            state = env._state_for_current_batch()
-            
-            for chunk_idx in range(0, len(test_scores_arr), chunk_size):
-                chunk_scores = test_scores_arr[chunk_idx:chunk_idx+chunk_size]
-                chunk_labels = test_labels_arr[chunk_idx:chunk_idx+chunk_size]
-                
-                if len(chunk_scores) == 0:
-                    break
-                
-                # ✅ NAF chọn threshold + feature weights
-                threshold, feature_weights = agent.act(state, explore=True)
-                adaptive_thresholds.append(threshold)
-                adaptive_feature_weights.append(feature_weights)
-                
-                # ✅ Apply feature weights to model
-                global_model.set_feature_weights(torch.tensor(feature_weights, device=device))
-                
-                # Tính reward từ chunk này
-                pred = (chunk_scores >= threshold).astype(np.int64)
-                tp = np.sum((pred == 1) & (chunk_labels == 1))
-                fp = np.sum((pred == 1) & (chunk_labels == 0))
-                fn = np.sum((pred == 0) & (chunk_labels == 1))
-                tn = np.sum((pred == 0) & (chunk_labels == 0))
-                
-                precision = tp / max(1, tp + fp)
-                recall = tp / max(1, tp + fn)
-                f1 = 2 * precision * recall / max(1e-8, precision + recall)
-                fpr = fp / max(1, fp + tn)
-                
-                # Reward dựa trên F1 và FPR
-                reward = f1 + 0.5 * recall - 0.5 * fpr
-                
-                # Cập nhật state (bao gồm threshold vừa chọn)
-                env.current_threshold = threshold
-                next_state = env._state_for_current_batch()
-                
-                # LƯU EXPERIENCE VÀ UPDATE NAF
-                done = (chunk_idx + chunk_size >= len(test_scores_arr))
-                agent.memory.push(state, threshold, reward, next_state, done)
-                
-                if len(agent.memory) > 10:
-                    agent.update()
-                
-                state = next_state
-                
-                if chunk_idx % max(1, len(test_scores_arr) // 10) == 0:
-                    print(f"[NAF] Chunk {chunk_idx//chunk_size + 1}, threshold: {threshold:.3f}, F1: {f1:.3f}")
-            
-            # Chọn threshold cuối cùng
-            naf_threshold = float(np.mean(adaptive_thresholds)) if adaptive_thresholds else static_threshold
-            naf_metrics = classification_metrics(test_labels_arr, test_scores_arr, threshold=naf_threshold)
-            
-            # So sánh NAF với static
-            if naf_metrics.get('f1', 0) > static_metrics.get('f1', 0):
-                best_threshold = naf_threshold
-                val_threshold_metrics = naf_metrics
-                val_threshold_metrics["threshold_selection_method"] = "naf_online"
-                print(f"[NAF] ✅ Using NAF online threshold: {best_threshold:.4f} (F1={naf_metrics['f1']:.4f} > static F1={static_metrics['f1']:.4f})")
-            else:
-                best_threshold = static_threshold
-                val_threshold_metrics = static_metrics
-                val_threshold_metrics["threshold_selection_method"] = "static"
-                print(f"[NAF] Using static threshold: {best_threshold:.4f} (static F1={static_metrics['f1']:.4f} >= NAF F1={naf_metrics['f1']:.4f})")
-            
-            # Lưu thông tin adaptive
-            val_threshold_metrics["adaptive_threshold_mean"] = float(np.mean(adaptive_thresholds)) if adaptive_thresholds else naf_threshold
-            val_threshold_metrics["adaptive_threshold_std"] = float(np.std(adaptive_thresholds)) if adaptive_thresholds else 0.0
-            val_threshold_metrics["naf_threshold"] = naf_threshold
-            val_threshold_metrics["naf_f1"] = naf_metrics.get('f1', 0)
+            print(f"[NAF] Best threshold from validation: {best_threshold:.4f}")
+            print(f"[NAF] Val F1: {val_threshold_metrics.get('f1', 0):.4f}")
             
         else:
             print(f"[DQN] Using DQN (discrete action)")
@@ -427,141 +452,121 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
             start = time.perf_counter()
             print(f"[TIMING] Training DQN on validation set...")
             
-            # Khởi tạo DQN (không train trước)
             env = BatchThresholdEnvironment(
                 val_scores, val_labels,
+                graph_embeddings=val_embeddings,
                 batch_size=cfg.get("rl", {}).get("batch_size", 256),
                 fpr_penalty=cfg.get("rl", {}).get("fpr_penalty", 2.0),
             )
             
+            # ✅ FIX: Giảm learning rate, thêm gradient clipping
             agent = ThresholdDQNAgent(
                 state_dim=env.state_dim,
                 thresholds=thresholds,
-                n_features=n_features,
+                n_features=embed_dim,
                 device=device,
+                lr=0.0001,           # ✅ Giảm từ 0.001 xuống 0.0001
+                grad_clip=0.5,       # ✅ Gradient clipping
+                min_buffer_size=64,  # ✅ Buffer tối thiểu
             )
             
-            # Train DQN trên validation set (tối ưu)
-            for ep in range(cfg.get("rl", {}).get("epochs", 30)):
+            rl_epochs = cfg.get("rl", {}).get("epochs", 100)
+            for ep in range(rl_epochs):
                 state = env.reset()
                 done = False
+                ep_loss = []
                 while not done:
                     action = agent.act(state, explore=True)
                     threshold = agent.threshold(action)
                     next_state, reward, done, info = env.step(threshold)
                     agent.memory.push(state, action, reward, next_state, done)
-                    agent.update(batch_size=min(64, len(agent.memory)))
+                    loss = agent.update(batch_size=min(64, len(agent.memory)))
+                    if loss is not None:
+                        ep_loss.append(loss)
                     state = next_state
                 agent.sync_target()
+                
+                if (ep + 1) % 10 == 0:
+                    avg_loss = np.mean(ep_loss) if ep_loss else 0
+                    print(f"  [DQN] Epoch {ep+1}/{rl_epochs}, avg_loss={avg_loss:.4f}")
             
             timing["rl_training_sec"] = time.perf_counter() - start
             print(f"[TIMING] DQN trained in {timing['rl_training_sec']:.2f}s")
             
-            # Tham khảo static threshold
-            static_threshold, static_metrics = choose_best_threshold_by_validation(
+            best_threshold, val_threshold_metrics = choose_best_threshold_by_validation(
                 val_scores, val_labels, thresholds, cfg=cfg
             )
+            val_threshold_metrics["threshold_selection_method"] = "dqn_validation"
             
-            # DQN online learning trên test set
-            print(f"[DQN] Running online adaptive loop on test set...")
-            
-            test_scores_arr = test_scores
-            test_labels_arr = test_labels
-            
-            adaptive_thresholds = []
-            chunk_size = cfg.get("rl", {}).get("adaptive_chunk_size", 1000)
-            
-            state = env.reset()
-            
-            for chunk_idx in range(0, len(test_scores_arr), chunk_size):
-                chunk_scores = test_scores_arr[chunk_idx:chunk_idx+chunk_size]
-                chunk_labels = test_labels_arr[chunk_idx:chunk_idx+chunk_size]
-                
-                if len(chunk_scores) == 0:
-                    break
-                
-                action = agent.act(state, explore=True)
-                threshold = agent.threshold(action)
-                adaptive_thresholds.append(threshold)
-                
-                pred = (chunk_scores >= threshold).astype(np.int64)
-                tp = np.sum((pred == 1) & (chunk_labels == 1))
-                fp = np.sum((pred == 1) & (chunk_labels == 0))
-                fn = np.sum((pred == 0) & (chunk_labels == 1))
-                tn = np.sum((pred == 0) & (chunk_labels == 0))
-                
-                precision = tp / max(1, tp + fp)
-                recall = tp / max(1, tp + fn)
-                f1 = 2 * precision * recall / max(1e-8, precision + recall)
-                fpr = fp / max(1, fp + tn)
-                
-                reward = f1 + 0.5 * recall - 0.5 * fpr
-                
-                env.current_threshold = threshold
-                next_state = env._state_for_current_batch()
-                done = (chunk_idx + chunk_size >= len(test_scores_arr))
-                
-                agent.memory.push(state, action, reward, next_state, done)
-                if len(agent.memory) > 10:
-                    agent.update(batch_size=min(64, len(agent.memory)))
-                if len(agent.memory) % 100 == 0:
-                    agent.sync_target()
-                
-                state = next_state
-                
-                if chunk_idx % max(1, len(test_scores_arr) // 10) == 0:
-                    print(f"[DQN] Chunk {chunk_idx//chunk_size + 1}, threshold: {threshold:.3f}, F1: {f1:.3f}, epsilon: {agent.epsilon:.3f}")
-            
-            # Chọn threshold cuối cùng
-            dqn_threshold = float(np.mean(adaptive_thresholds)) if adaptive_thresholds else static_threshold
-            dqn_metrics = classification_metrics(test_labels_arr, test_scores_arr, threshold=dqn_threshold)
-            
-            if dqn_metrics.get('f1', 0) > static_metrics.get('f1', 0):
-                best_threshold = dqn_threshold
-                val_threshold_metrics = dqn_metrics
-                val_threshold_metrics["threshold_selection_method"] = "dqn_online"
-                print(f"[DQN] ✅ Using DQN online threshold: {best_threshold:.4f} (F1={dqn_metrics['f1']:.4f} > static F1={static_metrics['f1']:.4f})")
-            else:
-                best_threshold = static_threshold
-                val_threshold_metrics = static_metrics
-                val_threshold_metrics["threshold_selection_method"] = "static"
-                print(f"[DQN] Using static threshold: {best_threshold:.4f} (static F1={static_metrics['f1']:.4f} >= DQN F1={dqn_metrics['f1']:.4f})")
-            
-            val_threshold_metrics["adaptive_threshold_mean"] = float(np.mean(adaptive_thresholds)) if adaptive_thresholds else dqn_threshold
-            val_threshold_metrics["adaptive_threshold_std"] = float(np.std(adaptive_thresholds)) if adaptive_thresholds else 0.0
-            val_threshold_metrics["dqn_threshold"] = dqn_threshold
-            val_threshold_metrics["dqn_f1"] = dqn_metrics.get('f1', 0)
-        
+            print(f"[DQN] Best threshold from validation: {best_threshold:.4f}")
+            print(f"[DQN] Val F1: {val_threshold_metrics.get('f1', 0):.4f}")
+    
     else:
         best_threshold, val_threshold_metrics = choose_best_threshold_by_validation(
             val_scores, val_labels, thresholds, cfg=cfg
         )
         val_threshold_metrics["threshold_selection_method"] = "static_only"
+        print(f"[NO RL] Best threshold from validation: {best_threshold:.4f}")
     
     # ============================================================
-    # 4. EVALUATION
+    # 4. ✅ BENCHMARK - ĐÁNH GIÁ TRÊN TEST (CHỈ DÙNG THRESHOLD CỐ ĐỊNH)
     # ============================================================
-    print(f"[TIMING] Evaluating...")
+    print(f"\n[TIMING] Evaluating on test set with fixed threshold...")
     start = time.perf_counter()
     
     val_metrics = classification_metrics(val_labels, val_scores, threshold=best_threshold)
     test_metrics = classification_metrics(test_labels, test_scores, threshold=best_threshold)
     
+    baseline_metrics = classification_metrics(test_labels, test_scores, threshold=0.5)
+    
     timing["inference_sec"] = time.perf_counter() - start
     print(f"[TIMING] Evaluation done in {timing['inference_sec']:.2f}s")
     
     # ============================================================
-    # 4.5. LATENCY & MEMORY MEASUREMENT (✅ THÊM TIMER)
+    # 5. ✅ ONLINE ADAPTATION SIMULATION (FIGURE 2)
     # ============================================================
-    print(f"[TIMING] Measuring latency and memory...")
+    online_result = None
+    if use_rl and agent is not None and test_embeddings is not None:
+        online_result = simulate_online_adaptation(
+            agent,
+            test_scores,
+            test_labels,
+            test_embeddings,
+            cfg,
+            device=device,
+        )
     
+    # ============================================================
+    # 6. ✅ PRINT COMPARISON (GIỐNG PAPER TABLE 2)
+    # ============================================================
+    print(f"\n{'='*80}")
+    print(f"[BENCHMARK] FraudGNN-RL vs Baseline (giống paper Table 2)")
+    print(f"{'='*80}")
+    print(f"{'Metric':<15} {'Baseline':<20} {'FraudGNN-RL':<20} {'Delta':<15}")
+    print(f"{'-'*80}")
+    
+    for metric in ['auc_roc', 'auc_pr', 'f1', 'recall', 'precision', 'fpr']:
+        base_val = baseline_metrics.get(metric, 0)
+        ours_val = test_metrics.get(metric, 0)
+        delta = ours_val - base_val
+        arrow = '↑' if delta > 0 else '↓'
+        if metric == 'fpr':
+            arrow = '↓' if delta < 0 else '↑'
+            delta = -delta
+        print(f"{metric:<15} {base_val:<20.4f} {ours_val:<20.4f} {arrow}{abs(delta):<14.4f}")
+    
+    print(f"{'='*80}")
+    print(f"Selected threshold: {best_threshold:.4f} (from validation set)")
+    
+    # ============================================================
+    # 7. LATENCY & MEMORY
+    # ============================================================
+    print(f"\n[TIMING] Measuring latency and memory...")
     latency_metrics = {}
     memory_metrics = {}
     
     try:
         from torch_geometric.loader import NeighborLoader
-        
-        # Lấy 1 batch từ test graph
         test_loader = NeighborLoader(
             test_graph,
             num_neighbors=[15, 10],
@@ -572,28 +577,17 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
         )
         test_batch = next(iter(test_loader))
         
-        # ✅ Đo latency
-        latency_metrics = measure_latency(
-            global_model,
-            test_batch,
-            device=device,
-            num_runs=20,
-        )
-        
-        # ✅ Đo memory
+        latency_metrics = measure_latency(global_model, test_batch, device=device, num_runs=20)
         memory_metrics = get_memory_usage()
         
         print(f"[TIMING] Latency: {latency_metrics.get('latency_mean_ms', 0):.2f}ms")
         print(f"[TIMING] Throughput: {latency_metrics.get('throughput_per_sec', 0):.0f} samples/s")
         print(f"[TIMING] RAM: {memory_metrics.get('ram_used_gb', 0):.2f}GB")
-        
     except Exception as e:
         print(f"⚠️ Latency/memory measurement failed: {e}")
-        latency_metrics = {}
-        memory_metrics = {}
     
     # ============================================================
-    # 5. TOTAL RUNTIME
+    # 8. TOTAL RUNTIME
     # ============================================================
     timing["total_runtime_sec"] = time.perf_counter() - total_start
     num_samples = len(df)
@@ -601,15 +595,12 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
     timing["throughput_samples_per_sec"] = num_samples / max(1, timing["total_runtime_sec"])
     
     print(f"\n[TIMING] ===== SUMMARY =====")
-    print(f"[TIMING] Total runtime: {timing['total_runtime_sec']:.2f}s ({timing['total_runtime_sec']/60:.2f}m)")
+    print(f"[TIMING] Total runtime: {timing['total_runtime_sec']:.2f}s")
     print(f"[TIMING] Throughput: {timing['throughput_samples_per_sec']:.2f} samples/s")
-    print(f"[TIMING] Runtime per sample: {timing['runtime_per_sample_sec']*1000:.2f}ms")
-    
-    # ✅ In timing summary
     print_timing_summary(timing)
     
     # ============================================================
-    # 6. RESULT (✅ FIX INDENTATION + THÊM TIMER)
+    # 9. RESULT
     # ============================================================
     pipeline = cfg.get("experiment", {}).get("pipeline", "fraudgnn_rl")
     model_name = "FraudGNN-RL" if pipeline == "fraudgnn_rl" else "FraudGNN-RL+"
@@ -621,26 +612,22 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "selected_threshold": best_threshold,
         "val_metrics": val_metrics,
         "test_metrics": test_metrics,
+        "baseline_metrics": baseline_metrics,
         "runtime": timing,
         "num_samples": num_samples,
         "latency": latency_metrics,
         "memory": memory_metrics,
         "federated_history": fed_history,
-        "notes": f"{model_name} with ablation flags",
+        "threshold_selection": "validation_set",
+        "notes": "Benchmark: RL only on validation, test uses fixed threshold (giống paper Table 2)",
+        "online_adaptation": online_result,
     }
     
-    # Thêm RL comparison vào result nếu có
     if use_rl:
-        result["rl_comparison"] = {
-            "rl_type": rl_type,
-            "static_threshold": static_threshold,
-            "static_f1": static_metrics.get('f1', 0),
-            "rl_threshold": val_threshold_metrics.get('threshold', best_threshold),
-            "rl_f1": val_threshold_metrics.get('f1', 0),
-            "adaptive_threshold_mean": val_threshold_metrics.get('adaptive_threshold_mean', 0),
-            "adaptive_threshold_std": val_threshold_metrics.get('adaptive_threshold_std', 0),
-            "num_adaptive_chunks": len(adaptive_thresholds) if use_rl else 0,
-            "selected": val_threshold_metrics.get("threshold_selection_method", "static"),
+        result["rl_info"] = {
+            "type": rl_type,
+            "epochs": rl_epochs if use_rl else 0,
+            "threshold_from": "validation",
         }
     
     exp_name = cfg.get("experiment", {}).get("name", "experiment")

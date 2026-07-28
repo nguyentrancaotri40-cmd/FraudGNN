@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass
 import random
-from typing import Deque, List, Tuple, Dict, Any
+from typing import Deque, List, Tuple, Dict, Any, Optional
 import numpy as np
 import torch
 import torch.nn as nn
@@ -13,9 +13,11 @@ import torch.nn.functional as F
 
 class ReplayBuffer:
     def __init__(self, capacity: int = 10000):
-        self.buffer: Deque[Tuple[np.ndarray, float, float, np.ndarray, bool]] = deque(maxlen=capacity)
+        # ✅ Lưu action là vector (threshold + feature_weights)
+        self.buffer: Deque[Tuple[np.ndarray, np.ndarray, float, np.ndarray, bool]] = deque(maxlen=capacity)
 
-    def push(self, state: np.ndarray, action: float, reward: float, next_state: np.ndarray, done: bool) -> None:
+    def push(self, state: np.ndarray, action: np.ndarray, reward: float, next_state: np.ndarray, done: bool) -> None:
+        """Push experience với action vector (threshold + feature_weights)."""
         self.buffer.append((state, action, reward, next_state, done))
 
     def sample(self, batch_size: int):
@@ -23,7 +25,7 @@ class ReplayBuffer:
         states, actions, rewards, next_states, dones = zip(*batch)
         return (
             torch.tensor(np.asarray(states), dtype=torch.float32),
-            torch.tensor(np.asarray(actions), dtype=torch.float32).unsqueeze(1),
+            torch.tensor(np.asarray(actions), dtype=torch.float32),  # ✅ Action vector
             torch.tensor(rewards, dtype=torch.float32),
             torch.tensor(np.asarray(next_states), dtype=torch.float32),
             torch.tensor(dones, dtype=torch.float32),
@@ -92,7 +94,7 @@ class NAFNetwork(nn.Module):
 class NAFAgent:
     state_dim: int
     action_dim: int = 1
-    n_features: int = 10  # ✅ SỐ FEATURE
+    n_features: int = 10
     hidden_dim: int = 128
     gamma: float = 0.99
     lr: float = 1e-3
@@ -127,8 +129,15 @@ class NAFAgent:
         self.noise_decay = 0.995
         self.noise_min = 0.01
     
-    def act(self, state: np.ndarray, explore: bool = True) -> Tuple[float, np.ndarray]:
-        """Chọn threshold và feature weights từ state."""
+    def act(self, state: np.ndarray, explore: bool = True) -> Tuple[np.ndarray, float, np.ndarray]:
+        """
+        Chọn action (threshold + feature weights) từ state.
+        
+        Returns:
+            action: [threshold, feature_weights] vector
+            threshold: float
+            feature_weights: np.ndarray
+        """
         with torch.no_grad():
             s = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
             q_values, action = self.policy_net(s)
@@ -137,16 +146,27 @@ class NAFAgent:
             threshold = torch.sigmoid(action[0, 0]).item()
             feature_weights = torch.softmax(action[0, 1:], dim=0).cpu().numpy()
         
+        # ✅ Tạo action vector đầy đủ
+        action_vector = np.zeros(self.action_dim + self.n_features, dtype=np.float32)
+        
         if explore:
+            # Thêm noise vào threshold
             threshold += np.random.normal(0, self.noise_std)
             threshold = np.clip(threshold, 0.0, 1.0)
             
-            # ✅ Thêm noise vào feature weights
+            # Thêm noise vào feature weights
             feature_weights += np.random.normal(0, 0.05, size=feature_weights.shape)
             feature_weights = np.clip(feature_weights, 0.0, 1.0)
-            feature_weights = feature_weights / feature_weights.sum()
+            if feature_weights.sum() > 0:
+                feature_weights = feature_weights / feature_weights.sum()
+            else:
+                feature_weights = np.ones_like(feature_weights) / len(feature_weights)
         
-        return float(threshold), feature_weights
+        # ✅ Action vector = [threshold, feature_weights]
+        action_vector[0] = threshold
+        action_vector[1:] = feature_weights
+        
+        return action_vector, float(threshold), feature_weights
     
     def update(self) -> float | None:
         if len(self.memory) < self.batch_size:
@@ -193,11 +213,13 @@ class BatchNAFEnvironment:
         self,
         scores: np.ndarray,
         labels: np.ndarray,
+        graph_embeddings: Optional[np.ndarray] = None,  # ✅ Thêm graph embeddings
         batch_size: int = 256,
         fpr_penalty: float = 2.0,
     ):
         self.scores = np.asarray(scores, dtype=np.float32)
         self.labels = np.asarray(labels, dtype=np.int64)
+        self.graph_embeddings = graph_embeddings  # ✅ Graph embedding từ TSSGC
         self.batch_size = int(batch_size)
         self.fpr_penalty = float(fpr_penalty)
         self.pos = 0
@@ -205,10 +227,17 @@ class BatchNAFEnvironment:
         self.history = []
         self.threshold_history = []
         self.memory_size = 10
+        
+        # ✅ Nếu có graph embeddings, dùng làm state
+        if self.graph_embeddings is not None:
+            self.embedding_dim = self.graph_embeddings.shape[1]
+        else:
+            self.embedding_dim = 64
     
     @property
     def state_dim(self) -> int:
-        return 9
+        # ✅ State = graph embedding dimension (giống paper)
+        return self.embedding_dim
     
     def reset(self) -> np.ndarray:
         self.pos = 0
@@ -223,34 +252,29 @@ class BatchNAFEnvironment:
         return self.scores[start:end], self.labels[start:end]
     
     def _state_for_current_batch(self) -> np.ndarray:
+        """
+        ✅ GIỐNG PAPER: State = graph embedding từ TSSGC
+        """
         s, y = self._batch()
         if len(s) == 0:
             return np.zeros(self.state_dim, dtype=np.float32)
         
-        current_fraud_ratio = float(np.mean(y))
+        if self.graph_embeddings is not None:
+            start = self.pos
+            end = min(len(self.scores), start + self.batch_size)
+            batch_embeddings = self.graph_embeddings[start:end]
+            state = np.mean(batch_embeddings, axis=0)
+            return state.astype(np.float32)
         
-        if len(self.history) > 0:
-            trend = current_fraud_ratio - np.mean(self.history[-5:])
-        else:
-            trend = 0.0
-        
-        if len(self.threshold_history) > 0:
-            threshold_mean = float(np.mean(self.threshold_history[-5:]))
-            threshold_std = float(np.std(self.threshold_history[-5:])) if len(self.threshold_history) > 1 else 0.0
-        else:
-            threshold_mean = 0.5
-            threshold_std = 0.0
-        
+        # Fallback (không khuyến nghị)
         return np.array([
             float(np.mean(s)),
             float(np.std(s)),
             float(np.min(s)),
             float(np.max(s)),
-            current_fraud_ratio,
+            float(np.mean(y)),
             float(len(s) / max(1, len(self.scores))),
             float(self.current_threshold),
-            threshold_mean,
-            threshold_std,
         ], dtype=np.float32)
     
     def _calculate_pos_step(self, threshold: float, scores: np.ndarray, labels: np.ndarray) -> int:
@@ -287,18 +311,16 @@ class BatchNAFEnvironment:
         fn = np.sum((pred == 0) & (y == 1))
         tn = np.sum((pred == 0) & (y == 0))
         
-        precision = tp / max(1, tp + fp)
-        recall = tp / max(1, tp + fn)
-        f1 = 2 * precision * recall / max(1e-8, precision + recall)
+        # ✅ GIỐNG PAPER: Reward = combination of accuracy and FPR
+        accuracy = (tp + tn) / max(1, tp + fp + fn + tn)
         fpr = fp / max(1, fp + tn)
         
-        threshold_change_penalty = abs(threshold - old_threshold) * 0.1
-        reward = float(f1 + 0.5 * recall - self.fpr_penalty * fpr - threshold_change_penalty)
+        reward = float(accuracy - self.fpr_penalty * fpr)
         
         pos_step = self._calculate_pos_step(threshold, s, y)
         self.pos += pos_step
         
-        self.history.append(f1)
+        self.history.append(accuracy)
         if len(self.history) > self.memory_size:
             self.history.pop(0)
         if len(self.threshold_history) > self.memory_size:
@@ -308,8 +330,7 @@ class BatchNAFEnvironment:
         next_state = self._state_for_current_batch() if not done else np.zeros(self.state_dim, dtype=np.float32)
         
         info = {
-            "f1": float(f1),
-            "recall": float(recall),
+            "accuracy": float(accuracy),
             "fpr": float(fpr),
             "threshold": float(threshold),
             "pos_step": int(pos_step),
@@ -326,6 +347,7 @@ def train_naf_agent(
     scores: np.ndarray,
     labels: np.ndarray,
     cfg: Dict[str, Any],
+    graph_embeddings: Optional[np.ndarray] = None,  # ✅ Thêm graph embeddings
     device: str | None = None,
     n_features: int = 10,
 ) -> tuple[NAFAgent, dict]:
@@ -336,6 +358,7 @@ def train_naf_agent(
     
     env = BatchNAFEnvironment(
         scores, labels,
+        graph_embeddings=graph_embeddings,  # ✅ State = graph embedding
         batch_size=batch_size,
         fpr_penalty=float(rl_cfg.get("fpr_penalty", 2.0)),
     )
@@ -356,9 +379,11 @@ def train_naf_agent(
         state = env.reset()
         done = False
         while not done:
-            threshold, feature_weights = agent.act(state, explore=True)
+            # ✅ action_vector đầy đủ (threshold + feature_weights)
+            action_vector, threshold, feature_weights = agent.act(state, explore=True)
             next_state, reward, done, info = env.step(threshold)
-            agent.memory.push(state, threshold, reward, next_state, done)
+            # ✅ Push action_vector (không phải scalar)
+            agent.memory.push(state, action_vector, reward, next_state, done)
             loss = agent.update()
             if loss is not None:
                 losses.append(loss)

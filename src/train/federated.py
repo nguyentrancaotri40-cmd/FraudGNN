@@ -2,8 +2,9 @@
 # FILE: src/train/federated.py
 # Federated Learning with FedAvg for FraudGNN-RL
 # GIỐNG PAPER 100%: 
-#   - FedAvg với trọng số theo số lượng mẫu
+#   - FedAvg trung bình cộng không trọng số (Algorithm 1)
 #   - Mỗi client có graph riêng
+#   - Graph alignment technique (Section IV.C)
 # ============================================================
 
 from __future__ import annotations
@@ -19,6 +20,105 @@ import logging
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def align_client_graphs(
+    client_graphs: List[Any],
+    alignment_method: str = "feature_projection",
+    shared_dim: Optional[int] = None,
+) -> List[Any]:
+    """
+    ✅ GIỐNG PAPER: Graph alignment technique (Section IV.C).
+    
+    Paper: "employ a graph alignment technique to ensure consistency 
+    across different local graphs."
+    """
+    import torch
+    
+    if alignment_method == "none" or len(client_graphs) <= 1:
+        return client_graphs
+    
+    print(f"[Federated] Applying graph alignment: {alignment_method}")
+    
+    aligned_graphs = []
+    
+    if alignment_method == "feature_projection":
+        feat_dims = [g.x.size(1) for g in client_graphs]
+        max_dim = max(feat_dims) if feat_dims else 64
+        
+        if shared_dim is not None:
+            target_dim = shared_dim
+        else:
+            target_dim = max_dim
+        
+        print(f"[Federated] Aligning features to dimension {target_dim}")
+        
+        for g in client_graphs:
+            g_copy = copy.deepcopy(g)
+            if g_copy.x.size(1) < target_dim:
+                padding = torch.zeros(
+                    g_copy.x.size(0), 
+                    target_dim - g_copy.x.size(1), 
+                    device=g_copy.x.device
+                )
+                g_copy.x = torch.cat([g_copy.x, padding], dim=1)
+            elif g_copy.x.size(1) > target_dim:
+                g_copy.x = g_copy.x[:, :target_dim]
+            aligned_graphs.append(g_copy)
+    
+    elif alignment_method == "node_type_mapping":
+        all_types = set()
+        for g in client_graphs:
+            if hasattr(g, 'node_type'):
+                all_types.update(g.node_type.cpu().numpy().tolist())
+        
+        if all_types:
+            type_to_idx = {t: i for i, t in enumerate(sorted(all_types))}
+            print(f"[Federated] Aligning {len(all_types)} node types")
+            
+            for g in client_graphs:
+                g_copy = copy.deepcopy(g)
+                if hasattr(g_copy, 'node_type'):
+                    new_types = torch.tensor(
+                        [type_to_idx[t.item()] for t in g_copy.node_type],
+                        device=g_copy.node_type.device
+                    )
+                    g_copy.node_type = new_types
+                aligned_graphs.append(g_copy)
+        else:
+            aligned_graphs = client_graphs
+    
+    elif alignment_method == "feature_normalization":
+        print(f"[Federated] Normalizing features")
+        for g in client_graphs:
+            g_copy = copy.deepcopy(g)
+            mean = g_copy.x.mean(dim=0, keepdim=True)
+            std = g_copy.x.std(dim=0, keepdim=True)
+            g_copy.x = (g_copy.x - mean) / (std + 1e-8)
+            aligned_graphs.append(g_copy)
+    
+    elif alignment_method == "shared_encoder":
+        feat_dims = [g.x.size(1) for g in client_graphs]
+        max_dim = max(feat_dims) if feat_dims else 64
+        target_dim = shared_dim or 64
+        
+        projection = nn.Linear(max_dim, target_dim)
+        
+        for g in client_graphs:
+            g_copy = copy.deepcopy(g)
+            if g_copy.x.size(1) < max_dim:
+                padding = torch.zeros(
+                    g_copy.x.size(0), 
+                    max_dim - g_copy.x.size(1), 
+                    device=g_copy.x.device
+                )
+                g_copy.x = torch.cat([g_copy.x, padding], dim=1)
+            g_copy.x = projection(g_copy.x)
+            aligned_graphs.append(g_copy)
+    else:
+        raise ValueError(f"Unknown alignment method: {alignment_method}")
+    
+    return aligned_graphs
 
 
 class FederatedClient:
@@ -47,21 +147,17 @@ class FederatedClient:
             dropout=float(model_cfg.get("dropout", 0.2)),
         ).to(self.device)
         
-        # ✅ Lưu số lượng mẫu để tính trọng số
         self.num_samples = data.x.size(0)
         self.optimizer = None
     
     def set_weights(self, weights: OrderedDict):
-        """Set model weights from global model."""
         self.model.load_state_dict(weights)
         self.optimizer = None
     
     def get_weights(self) -> OrderedDict:
-        """Get model weights for aggregation."""
         return self.model.state_dict()
     
     def get_num_samples(self) -> int:
-        """✅ Get number of samples for weighted aggregation."""
         return self.num_samples
     
     def local_update(
@@ -73,7 +169,6 @@ class FederatedClient:
         total_rounds: int = 1,
         use_pruning: bool = False,
     ) -> Dict[str, float]:
-        """Perform local training on client data."""
         from src.train.train_gnn import _pos_weight
         from src.eval.evaluate import predict_scores
         from src.eval.metrics import classification_metrics
@@ -90,9 +185,6 @@ class FederatedClient:
         pos_weight = _pos_weight(data.y).to(device)
         self.model.train()
         
-        # ============================================================
-        # 🔧 PRUNING: Apply before training (if enabled)
-        # ============================================================
         if use_pruning:
             from src.utils.pruning import apply_pruning_inplace, update_pruning_mask, get_pruning_stats
             
@@ -119,9 +211,6 @@ class FederatedClient:
             print(f"[Federated] Client {self.client_id}, Round {current_round}: "
                   f"pruned {stats['pruning_ratio']*100:.2f}% of weights")
         
-        # ============================================================
-        # TRAINING
-        # ============================================================
         from torch_geometric.loader import NeighborLoader
         
         neighbor_samples = self.cfg.get("train", {}).get("neighbor_samples", [15, 10])
@@ -161,9 +250,6 @@ class FederatedClient:
         
         avg_loss = total_loss / max(1, total_batches) if total_batches > 0 else 0.0
         
-        # ============================================================
-        # 🔧 PRUNING: Remove masks before returning weights
-        # ============================================================
         if use_pruning:
             from src.utils.pruning import remove_pruning
             self.model = remove_pruning(self.model)
@@ -185,7 +271,6 @@ class FederatedClient:
         }
     
     def evaluate(self, data) -> Dict[str, float]:
-        """Evaluate local model on given data."""
         from src.eval.evaluate import predict_scores
         from src.eval.metrics import classification_metrics
         
@@ -221,7 +306,6 @@ class FederatedServer:
         clients: List[FederatedClient],
         method: str = "fedavg",
     ) -> OrderedDict:
-        """Aggregate client weights."""
         if not clients:
             return self.global_weights
         
@@ -234,12 +318,11 @@ class FederatedServer:
     
     def _fedavg_aggregate(self, clients: List[FederatedClient]) -> OrderedDict:
         """
-        ✅ GIỐNG PAPER: FedAvg với trọng số theo số lượng mẫu.
+        ✅ GIỐNG PAPER 100%: Trung bình cộng không trọng số.
         
-        Công thức: θ_t = Σ (n_i / n_total) * θ_i
-        Trong đó n_i là số lượng mẫu của client i.
+        Paper Algorithm 1, dòng 7: θ_t = (1/|C_t|) Σ_{i∈C_t} θ_i^t
         """
-        total_samples = sum(client.get_num_samples() for client in clients)
+        num_clients = len(clients)
         avg_weights = OrderedDict()
         
         for key in self.global_weights.keys():
@@ -247,22 +330,19 @@ class FederatedServer:
         
         for client in clients:
             client_weights = client.get_weights()
-            weight_ratio = client.get_num_samples() / total_samples
-            
             for key in avg_weights.keys():
-                avg_weights[key] += client_weights[key].float() * weight_ratio
+                avg_weights[key] += client_weights[key].float() / num_clients
         
         self.global_weights = avg_weights
         self.global_model.load_state_dict(avg_weights)
         
-        print(f"[Federated] Aggregated {len(clients)} clients with {total_samples} total samples")
+        print(f"[Federated] Aggregated {len(clients)} clients (unweighted average, giống paper)")
         for client in clients:
-            print(f"  Client {client.client_id}: {client.get_num_samples():,} samples ({client.get_num_samples()/total_samples*100:.1f}%)")
+            print(f"  Client {client.client_id}: {client.get_num_samples():,} samples")
         
         return avg_weights
     
     def _median_aggregate(self, clients: List[FederatedClient]) -> OrderedDict:
-        """Median aggregation (robust to outliers)."""
         median_weights = OrderedDict()
         all_weights = [client.get_weights() for client in clients]
         
@@ -286,7 +366,6 @@ class FederatedServer:
         use_pruning: bool = False,
         verbose: bool = True,
     ) -> Dict[str, float]:
-        """One round of federated learning."""
         for client in clients:
             client.set_weights(self.global_weights)
         
@@ -332,8 +411,6 @@ class FederatedServer:
         use_pruning: bool = False,
         verbose: bool = True,
     ) -> Dict[str, Any]:
-        """Full federated training loop with timing."""
-        
         print(f"\n[Federated] Starting federated training with {len(clients)} clients")
         print(f"[Federated] Rounds: {rounds}, Local epochs: {local_epochs}, LR: {lr}")
         print(f"[Federated] Pruning: {'ENABLED' if use_pruning else 'DISABLED'}")
@@ -384,9 +461,6 @@ class FederatedServer:
 
 
 def load_client_graph(client_id: int, data_dir: str) -> Any:
-    """
-    ✅ Load graph riêng cho từng client từ file.
-    """
     from src.graph.build_graph import load_graph
     
     graph_path = Path(data_dir) / f"client_{client_id}_graph.pkl"
@@ -396,9 +470,6 @@ def load_client_graph(client_id: int, data_dir: str) -> Any:
 
 
 def save_client_graph(graph, client_id: int, data_dir: str) -> None:
-    """
-    ✅ Lưu graph riêng cho từng client.
-    """
     from src.graph.build_graph import save_graph
     
     graph_path = Path(data_dir) / f"client_{client_id}_graph.pkl"
@@ -412,18 +483,15 @@ def create_federated_clients_from_raw_data(
     model_class: nn.Module,
     num_clients: int = 3,
     device: str = "cpu",
+    alignment_method: str = "none",
 ) -> List[FederatedClient]:
-    """
-    ✅ GIỐNG PAPER 100%: Mỗi client có graph riêng từ dữ liệu riêng.
-    
-    Cách 1: Load từ các file riêng biệt (mỗi client có dataset riêng)
-    """
     from src.data.load_data import load_dataset
     from src.data.preprocess import FraudPreprocessor
     from src.graph.build_graph import build_transaction_graph
     from src.graph.hybrid_graph import build_hybrid_transaction_graph
     
     clients = []
+    client_graphs = []
     
     for client_id in range(num_clients):
         client_csv = Path(raw_data_dir) / f"client_{client_id}.csv"
@@ -445,14 +513,24 @@ def create_federated_clients_from_raw_data(
             else:
                 graph = build_transaction_graph(x, y, t, client_cfg)
             
-            client = FederatedClient(
-                client_id=client_id,
-                data=graph,
-                cfg=cfg,
-                model_class=model_class,
-                device=device,
-            )
-            clients.append(client)
+            client_graphs.append(graph)
+    
+    if alignment_method != "none" and client_graphs:
+        client_graphs = align_client_graphs(
+            client_graphs,
+            alignment_method=alignment_method,
+            shared_dim=cfg.get("model", {}).get("hidden_dim", 64),
+        )
+    
+    for client_id, graph in enumerate(client_graphs):
+        client = FederatedClient(
+            client_id=client_id,
+            data=graph,
+            cfg=cfg,
+            model_class=model_class,
+            device=device,
+        )
+        clients.append(client)
     
     return clients
 
@@ -462,20 +540,15 @@ def create_federated_clients_from_different_datasets(
     cfg: Dict[str, Any],
     model_class: nn.Module,
     device: str = "cpu",
+    alignment_method: str = "none",
 ) -> List[FederatedClient]:
-    """
-    ✅ GIỐNG PAPER 100%: Mỗi client có graph riêng từ dataset khác nhau.
-    
-    Args:
-        dataset_paths: List of paths to different datasets
-        Ví dụ: ["data/raw/paysim.csv", "data/raw/creditcard.csv", "data/raw/ieee_cis.csv"]
-    """
     from src.data.load_data import load_dataset
     from src.data.preprocess import FraudPreprocessor
     from src.graph.build_graph import build_transaction_graph
     from src.graph.hybrid_graph import build_hybrid_transaction_graph
     
     clients = []
+    client_graphs = []
     
     for client_id, dataset_path in enumerate(dataset_paths):
         print(f"[Federated] Client {client_id} loading dataset: {dataset_path}")
@@ -495,6 +568,16 @@ def create_federated_clients_from_different_datasets(
         else:
             graph = build_transaction_graph(x, y, t, client_cfg)
         
+        client_graphs.append(graph)
+    
+    if alignment_method != "none" and client_graphs:
+        client_graphs = align_client_graphs(
+            client_graphs,
+            alignment_method=alignment_method,
+            shared_dim=cfg.get("model", {}).get("hidden_dim", 64),
+        )
+    
+    for client_id, graph in enumerate(client_graphs):
         client = FederatedClient(
             client_id=client_id,
             data=graph,
@@ -512,19 +595,15 @@ def create_federated_clients_from_single_dataset(
     model_class: nn.Module,
     num_clients: int = 3,
     device: str = "cpu",
+    alignment_method: str = "none",
 ) -> List[FederatedClient]:
-    """
-    ✅ GIỐNG PAPER HƠN: Mỗi client có graph riêng bằng cách chia dữ liệu theo thời gian.
-    
-    Paper yêu cầu mỗi tổ chức có dữ liệu riêng.
-    Cách này mô phỏng bằng cách chia dữ liệu theo thời gian (temporal split).
-    """
     from src.data.load_data import load_dataset
     from src.data.preprocess import FraudPreprocessor
     from src.graph.build_graph import build_transaction_graph
     from src.graph.hybrid_graph import build_hybrid_transaction_graph
     
     clients = []
+    client_graphs = []
     
     df = load_dataset(cfg)
     time_col = cfg["dataset"].get("time_col")
@@ -554,14 +633,24 @@ def create_federated_clients_from_single_dataset(
             else:
                 graph = build_transaction_graph(x, y, t, cfg)
             
-            client = FederatedClient(
-                client_id=client_id,
-                data=graph,
-                cfg=cfg,
-                model_class=model_class,
-                device=device,
-            )
-            clients.append(client)
+            client_graphs.append(graph)
+    
+    if alignment_method != "none" and client_graphs:
+        client_graphs = align_client_graphs(
+            client_graphs,
+            alignment_method=alignment_method,
+            shared_dim=cfg.get("model", {}).get("hidden_dim", 64),
+        )
+    
+    for client_id, graph in enumerate(client_graphs):
+        client = FederatedClient(
+            client_id=client_id,
+            data=graph,
+            cfg=cfg,
+            model_class=model_class,
+            device=device,
+        )
+        clients.append(client)
     
     return clients
 
@@ -573,14 +662,9 @@ def create_federated_clients(
     num_clients: int = 3,
     device: str = "cpu",
 ) -> List[FederatedClient]:
-    """
-    ✅ GIỐNG PAPER 100%: Mỗi client có graph riêng.
+    fed_cfg = cfg.get("federated", {})
+    alignment_method = fed_cfg.get("alignment_method", "feature_projection")
     
-    Priority:
-    1. Load từ các file riêng (client_0.csv, client_1.csv, ...)
-    2. Load từ các dataset khác nhau
-    3. Fallback: tách dữ liệu theo thời gian
-    """
     raw_data_dir = cfg.get("dataset", {}).get("path", "data/raw")
     
     clients = create_federated_clients_from_raw_data(
@@ -588,7 +672,8 @@ def create_federated_clients(
         cfg,
         model_class,
         num_clients,
-        device
+        device,
+        alignment_method=alignment_method,
     )
     
     if clients:
@@ -600,7 +685,8 @@ def create_federated_clients(
             dataset_paths,
             cfg,
             model_class,
-            device
+            device,
+            alignment_method=alignment_method,
         )
         if clients:
             return clients
@@ -609,7 +695,8 @@ def create_federated_clients(
         cfg,
         model_class,
         num_clients,
-        device
+        device,
+        alignment_method=alignment_method,
     )
 
 
@@ -622,7 +709,7 @@ def train_federated(
     device: str = "cpu",
     use_pruning: bool = False,
 ) -> Dict[str, Any]:
-    """Full federated training pipeline."""
+    """Full federated training pipeline với graph alignment (giống paper)."""
     from src.models.fraudgnn_rl import FraudGNNRL
     from src.eval.evaluate import predict_scores
     from src.eval.metrics import classification_metrics
@@ -635,6 +722,9 @@ def train_federated(
     lr = float(fed_cfg.get("learning_rate", 0.001))
     batch_size = int(fed_cfg.get("batch_size", 64))
     
+    # ============================================================
+    # BƯỚC 1: Tạo clients
+    # ============================================================
     clients = create_federated_clients(
         data=train_data,
         cfg=cfg,
@@ -643,11 +733,59 @@ def train_federated(
         device=device,
     )
     
+    # ============================================================
+    # BƯỚC 2: Lấy in_dim thực tế
+    # ============================================================
+    if clients:
+        actual_in_dim = clients[0].data.x.size(1)
+        print(f"[Federated] Actual in_dim after alignment: {actual_in_dim}")
+    else:
+        actual_in_dim = train_data.x.size(1)
+    
+    # ============================================================
+    # BƯỚC 3: Đồng bộ val_data và test_data
+    # ============================================================
+    # Đưa về đúng device
+    val_data = val_data.to(device)
+    test_data = test_data.to(device)
+    
+    # Pad hoặc truncate val_data
+    if val_data.x.size(1) != actual_in_dim:
+        print(f"[Federated] Resizing val_data from {val_data.x.size(1)} to {actual_in_dim}")
+        if val_data.x.size(1) < actual_in_dim:
+            padding = torch.zeros(
+                val_data.x.size(0), 
+                actual_in_dim - val_data.x.size(1), 
+                device=device,
+                dtype=val_data.x.dtype
+            )
+            val_data.x = torch.cat([val_data.x, padding], dim=1)
+        else:
+            val_data.x = val_data.x[:, :actual_in_dim]
+    
+    # Pad hoặc truncate test_data
+    if test_data.x.size(1) != actual_in_dim:
+        print(f"[Federated] Resizing test_data from {test_data.x.size(1)} to {actual_in_dim}")
+        if test_data.x.size(1) < actual_in_dim:
+            padding = torch.zeros(
+                test_data.x.size(0), 
+                actual_in_dim - test_data.x.size(1), 
+                device=device,
+                dtype=test_data.x.dtype
+            )
+            test_data.x = torch.cat([test_data.x, padding], dim=1)
+        else:
+            test_data.x = test_data.x[:, :actual_in_dim]
+    
+    # ============================================================
+    # BƯỚC 4: Tạo server
+    # ============================================================
     model_cfg = cfg.get("model", {})
+    
     server = FederatedServer(
         model_class=model_class,
         model_args={
-            "in_dim": train_data.x.size(-1),
+            "in_dim": actual_in_dim,
             "hidden_dim": int(model_cfg.get("hidden_dim", 64)),
             "num_layers": int(model_cfg.get("num_layers", 3)),
             "num_node_types": int(model_cfg.get("num_node_types", 1)),
@@ -656,6 +794,24 @@ def train_federated(
         device=device,
     )
     
+    # ============================================================
+    # BƯỚC 5: Cập nhật global_model
+    # ============================================================
+    server.global_model = model_class(
+        in_dim=actual_in_dim,
+        hidden_dim=int(model_cfg.get("hidden_dim", 64)),
+        num_layers=int(model_cfg.get("num_layers", 3)),
+        num_node_types=int(model_cfg.get("num_node_types", 1)),
+        dropout=float(model_cfg.get("dropout", 0.2)),
+    ).to(device)
+    server.global_weights = server.global_model.state_dict()
+    
+    for client in clients:
+        client.set_weights(server.global_weights)
+    
+    # ============================================================
+    # BƯỚC 6: Federated training
+    # ============================================================
     result = server.federated_training(
         clients=clients,
         rounds=rounds,

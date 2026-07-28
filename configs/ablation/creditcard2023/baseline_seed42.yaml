@@ -4,6 +4,7 @@ dataset:
   path: data/raw/creditcard_2023_fast.csv
   random_state: 42
   sample_frac: 1.0
+  stratified_sampling: true        # ✅ Thêm: stratified random sampling (giống paper)
   time_col: id
   time_unit: index
 experiment:
@@ -19,6 +20,8 @@ federated:
   local_epochs: 5
   num_clients: 3
   rounds: 10
+  align_graphs: true                # ✅ Thêm: bật graph alignment (Section IV.C)
+  alignment_method: feature_projection  # ✅ Thêm: phương pháp alignment
 flags:
   hard_edges: true
   hybrid_graph: false
@@ -28,7 +31,7 @@ flags:
 graph:
   add_self_loops: true
   max_neighbors_per_node: 3
-  similarity_threshold: 0.98
+  similarity_threshold: 0.9         # ✅ Sửa: 0.98 → 0.9 (giống paper)
   time_window_hours: 1000.0
   type: transaction_similarity
 model:
@@ -47,17 +50,18 @@ rl:
   epochs: 30
   fpr_penalty: 0.5
   threshold_bins:
-  - 0.1
+  - 0.05                         # ✅ Thêm: bins thấp hơn (giống paper)
+  - 0.10
   - 0.15
-  - 0.2
+  - 0.20
   - 0.25
-  - 0.3
+  - 0.30
   - 0.35
-  - 0.4
+  - 0.40
   - 0.45
-  - 0.5
+  - 0.50
 split:
-  strategy: temporal
+  strategy: temporal               # ✅ Giữ nguyên (đúng paper)
   train_ratio: 0.7
   val_ratio: 0.15
 threshold_selection:

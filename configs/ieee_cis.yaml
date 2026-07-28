@@ -159,6 +159,8 @@ federated:
   learning_rate: 0.001
   batch_size: 64                    # ✅ GIỐNG PAPER
   aggregation: fedavg
+  align_graphs: true
+  alignment_method: feature_projection
 
 threshold_selection:
   metric: custom

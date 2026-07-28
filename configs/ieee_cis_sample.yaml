@@ -1,23 +1,24 @@
 # ============================================================
-# CONFIG: IEEE-CIS - TEST NHANH (GIỐNG PAPER 100%)
+# CONFIG: IEEE-CIS - SAMPLE (GIỐNG PAPER 100% - EPOCHS 100)
 # ============================================================
 # ✅ GIỐNG PAPER 100%:
 #   - Temporal split (70-15-15)
 #   - batch_size: 64 / 256
-#   - epochs: 100
-#   - learning_rate: 0.001
-#   - dropout: 0.2
+#   - epochs: 100 ✅ GIỮ NGUYÊN
 #   - max_neighbors_per_node: 3
 #   - hidden_dim: 64, num_layers: 3
 #   - similarity_threshold: 0.99
 #   - federated: true
 #   - Stratified random sampling (giữ tỷ lệ fraud)
+#   - Graph alignment (Section IV.C)
 #
 # ⚠️ CHỈ KHÁC PAPER (để test nhanh):
-#   - sample_frac: 0.3 (30% data - paper ko quy định)
-#   - federated.rounds: 20 (giảm để test)
-#   - federated.local_epochs: 5 (giảm để test)
-#   - patience: 15 (giảm để test)
+#   - sample_frac: 0.2 (20% data - paper ko quy định)
+#   - federated.rounds: 3 (giảm để test - paper ko quy định)
+#   - federated.local_epochs: 1 (giảm để test - paper ko quy định)
+#   - patience: 5 (giảm để test - paper ko quy định)
+#   - rl.learning_rate: 0.0001 (giảm để ổn định)
+#   - rl.fpr_penalty: 2.0 (tăng để giảm FPR)
 # ============================================================
 
 flags:
@@ -25,9 +26,10 @@ flags:
   soft_edges: false
   hybrid_graph: false
   weighted_fusion: false
-  federated: true          # ✅ GIỐNG PAPER
-  dqn: true
+  federated: true
+  rl: true
   pruning: false
+  dqn: true
 
 experiment:
   name: ieee_cis_sample_10pct
@@ -38,20 +40,20 @@ dataset:
   name: IEEE-CIS
   path: data/raw/ieee_cis_fast.csv
   label_col: isFraud
-  time_col: TransactionDT      # ✅ FIX: dùng TransactionDT
-  time_unit: second            # ✅ FIX: đơn vị giây
-  sample_frac: 0.3             # ⚠️ 30% data để test nhanh
-  stratified_sampling: true    # ✅ GIỐNG PAPER: random sampling giữ tỷ lệ
+  time_col: TransactionDT
+  time_unit: second
+  sample_frac: 0.2
+  stratified_sampling: true
   random_state: 42
 
 split:
-  strategy: temporal           # ✅ GIỐNG PAPER
+  strategy: temporal
   train_ratio: 0.70
   val_ratio: 0.15
 
 preprocess:
   drop_cols:
-    - time_idx                 # ✅ Đã có TransactionDT nên ko cần time_idx
+    - time_idx
     - TransactionID
     - TransactionDT
     - card1
@@ -131,37 +133,51 @@ preprocess:
 graph:
   type: transaction_similarity
   time_window_hours: 50.0
-  similarity_threshold: 0.99        # ✅ GIỐNG PAPER
-  max_neighbors_per_node: 3         # ✅ GIỐNG PAPER
+  similarity_threshold: 0.99
+  max_neighbors_per_node: 3
   add_self_loops: true
 
 model:
-  hidden_dim: 64                    # ✅ GIỐNG PAPER
-  num_layers: 3                     # ✅ GIỐNG PAPER
-  dropout: 0.20                     # ✅ GIỐNG PAPER
+  hidden_dim: 64
+  num_layers: 3
+  dropout: 0.20
   num_node_types: 1
 
 train:
-  epochs: 100                       # ✅ GIỐNG PAPER
-  patience: 15                      # ⚠️ Giảm để test nhanh
-  batch_size: 64                    # ✅ GIỐNG PAPER
-  learning_rate: 0.001              # ✅ GIỐNG PAPER
+  epochs: 100                      # ✅ GIỮ NGUYÊN (giống paper)
+  patience: 5
+  batch_size: 64
+  learning_rate: 0.001
   weight_decay: 0.0001
 
 rl:
   enabled: true
-  threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60]
-  fpr_penalty: 0.3
-  epochs: 100                       # ✅ GIỐNG PAPER
-  batch_size: 256                   # ✅ GIỐNG PAPER
+  threshold_bins:
+    - 0.20
+    - 0.25
+    - 0.30
+    - 0.35
+    - 0.40
+    - 0.45
+    - 0.50
+    - 0.55
+    - 0.60
+    - 0.65
+    - 0.70
+  fpr_penalty: 2.0
+  epochs: 100                      # ✅ GIỮ NGUYÊN (giống paper)
+  batch_size: 256
+  learning_rate: 0.0001
 
 federated:
   num_clients: 3
-  rounds: 20                         
-  local_epochs: 5                
-  learning_rate: 0.001              # ✅ GIỐNG PAPER
-  batch_size: 64                    # ✅ GIỐNG PAPER
+  rounds: 3
+  local_epochs: 1
+  learning_rate: 0.001
+  batch_size: 64
   aggregation: fedavg
+  align_graphs: true
+  alignment_method: feature_projection
 
 threshold_selection:
   metric: custom

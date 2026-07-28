@@ -20,3 +20,29 @@ outputs/results/
 *.pth
 *.pkl
 *.log
+
+# 🔒 ============================================
+# 🔒 BẢO MẬT - Kaggle API Tokens & Credentials
+# 🔒 ============================================
+.kaggle/
+kaggle.json
+access_token
+*.token
+*.secret
+.env
+.env.local
+.env.*.local
+
+# 🔒 Credentials khác
+credentials.json
+*.key
+*.pem
+*.p12
+
+# 🔒 IDE
+.vscode/
+.idea/
+*.swp
+
+# 🔒 Jupyter Notebook
+.ipynb_checkpoints/
