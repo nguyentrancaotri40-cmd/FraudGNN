@@ -8,74 +8,56 @@ on:
 jobs:
   push-to-kaggle:
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          
       - name: Install Kaggle CLI & jq
         run: |
           pip install kaggle
           sudo apt-get update && sudo apt-get install -y jq
-        
       - name: Configure Kaggle (Safe version)
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_KEY: ${{ secrets.KAGGLE_API_TOKEN }}
           KAGGLE_CONFIG_DIR: ${{ runner.temp }}/.kaggle
         run: |
-          # Kiểm tra secrets có tồn tại không
           if [ -z "$KAGGLE_USERNAME" ] || [ -z "$KAGGLE_KEY" ]; then
-            echo "❌ Kaggle secrets are not set. Make sure KAGGLE_USERNAME and KAGGLE_API_TOKEN are configured in repo secrets."
+            echo "❌ Kaggle secrets are not set."
             exit 1
           fi
-          
-          # Tạo file cấu hình
           mkdir -p "$KAGGLE_CONFIG_DIR"
           cat > "$KAGGLE_CONFIG_DIR/kaggle.json" <<EOF
           {"username":"$KAGGLE_USERNAME","key":"$KAGGLE_KEY"}
           EOF
           chmod 600 "$KAGGLE_CONFIG_DIR/kaggle.json"
-          
-          # Xuất biến môi trường cho các bước sau
           echo "KAGGLE_CONFIG_DIR=$KAGGLE_CONFIG_DIR" >> $GITHUB_ENV
-          
-          # Xác thực thử (sẽ fail nếu token sai)
           echo "🔑 Testing Kaggle authentication..."
           if ! kaggle kernels list --user "$KAGGLE_USERNAME" --page-size 1 > /dev/null 2>&1; then
-            echo "❌ Kaggle authentication failed. Please check your API token."
+            echo "❌ Kaggle authentication failed."
             exit 1
           else
             echo "✅ Kaggle authentication successful!"
           fi
-          
       - name: Push kernel to Kaggle
         env:
           KAGGLE_CONFIG_DIR: ${{ runner.temp }}/.kaggle
         run: |
-          # Kiểm tra file metadata tồn tại
           if [ ! -f kernel-metadata.json ]; then
-            echo "❌ kernel-metadata.json not found in working directory."
+            echo "❌ kernel-metadata.json not found."
             ls -la
             exit 1
           fi
-          
-          # In ID và title để kiểm tra (không in secret)
           echo "📄 Kernel metadata:"
-          jq -r '.id, .title' kernel-metadata.json | while read -r line; do echo "  - $line"; done
-          
-          # Push lên Kaggle
+          jq -r '.id, .title' kernel-metadata.json
           echo "🚀 Pushing to Kaggle..."
           kaggle kernels push -p ./ --quiet
-          
           if [ $? -eq 0 ]; then
             echo "✅ Successfully pushed to Kaggle!"
           else
-            echo "❌ Push failed. Check the error message above."
+            echo "❌ Push failed."
             exit 1
           fi
