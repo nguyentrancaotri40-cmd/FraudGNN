@@ -1,7 +1,7 @@
 {
   "id": "nguyntrncaotr/fraudgnn-rl",
   "title": "FraudGNN-RL Reproduction",
-  "code_file": "fraudgnn.ipynb",
+  "code_file": "fraudgnn-rl.ipynb",
   "language": "python",
   "kernel_type": "notebook",
   "is_private": true,
