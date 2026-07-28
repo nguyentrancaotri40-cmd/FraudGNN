@@ -8,6 +8,8 @@ on:
 jobs:
   push-to-kaggle:
     runs-on: ubuntu-latest
+    env:
+      KAGGLE_CONFIG_DIR: ${{ runner.temp }}/.kaggle
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -23,7 +25,6 @@ jobs:
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
-          KAGGLE_CONFIG_DIR: ${{ runner.temp }}/.kaggle
         run: |
           if [ -z "$KAGGLE_USERNAME" ] || [ -z "$KAGGLE_API_TOKEN" ]; then
             echo "❌ Kaggle secrets are not set."
@@ -35,9 +36,11 @@ jobs:
           EOF
           chmod 600 "$KAGGLE_CONFIG_DIR/kaggle.json"
           echo "KAGGLE_CONFIG_DIR=$KAGGLE_CONFIG_DIR" >> $GITHUB_ENV
+          echo "🔑 Kaggle config created. username from file:"
+          jq -r '.username' "$KAGGLE_CONFIG_DIR/kaggle.json"
           echo "🔑 Testing Kaggle authentication..."
           if ! kaggle kernels list --user "$KAGGLE_USERNAME" --page-size 1 > /dev/null 2>&1; then
-            echo "❌ Kaggle authentication failed."
+            echo "❌ Kaggle authentication failed. Check secrets and ensure token matches username."
             exit 1
           else
             echo "✅ Kaggle authentication successful!"
