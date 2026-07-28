@@ -8,56 +8,71 @@ on:
 jobs:
   push-to-kaggle:
     runs-on: ubuntu-latest
-    env:
-      KAGGLE_CONFIG_DIR: ${{ runner.temp }}/.kaggle
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          
       - name: Install Kaggle CLI & jq
         run: |
           pip install kaggle
           sudo apt-get update && sudo apt-get install -y jq
-      - name: Configure Kaggle (Safe version)
+          
+      - name: Configure Kaggle
+        id: setup_kaggle
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
         run: |
+          # Kiểm tra secrets
           if [ -z "$KAGGLE_USERNAME" ] || [ -z "$KAGGLE_API_TOKEN" ]; then
             echo "❌ Kaggle secrets are not set."
             exit 1
           fi
+          
+          # Tạo thư mục cấu hình trong runner.temp
+          KAGGLE_CONFIG_DIR="${{ runner.temp }}/.kaggle"
           mkdir -p "$KAGGLE_CONFIG_DIR"
+          
+          # Tạo file kaggle.json
           cat > "$KAGGLE_CONFIG_DIR/kaggle.json" <<EOF
           {"username":"$KAGGLE_USERNAME","key":"$KAGGLE_API_TOKEN"}
           EOF
           chmod 600 "$KAGGLE_CONFIG_DIR/kaggle.json"
+          
+          # Lưu đường dẫn vào biến môi trường cho các step sau
           echo "KAGGLE_CONFIG_DIR=$KAGGLE_CONFIG_DIR" >> $GITHUB_ENV
-          echo "🔑 Kaggle config created. username from file:"
-          jq -r '.username' "$KAGGLE_CONFIG_DIR/kaggle.json"
-          echo "🔑 Testing Kaggle authentication..."
+          
+          echo "🔑 Kaggle config created. Username: $KAGGLE_USERNAME"
+          
+          # Kiểm tra xác thực
+          echo "🔑 Testing authentication..."
           if ! kaggle kernels list --user "$KAGGLE_USERNAME" --page-size 1 > /dev/null 2>&1; then
-            echo "❌ Kaggle authentication failed. Check secrets and ensure token matches username."
+            echo "❌ Kaggle authentication failed. Please check your API token."
             exit 1
           else
             echo "✅ Kaggle authentication successful!"
           fi
-      - name: Push kernel to Kaggle
-        env:
-          KAGGLE_CONFIG_DIR: ${{ runner.temp }}/.kaggle
+          
+      - name: Push to Kaggle
         run: |
+          # Kiểm tra file metadata
           if [ ! -f kernel-metadata.json ]; then
             echo "❌ kernel-metadata.json not found."
             ls -la
             exit 1
           fi
+          
           echo "📄 Kernel metadata:"
           jq -r '.id, .title' kernel-metadata.json
+          
           echo "🚀 Pushing to Kaggle..."
           kaggle kernels push -p ./
+          
           if [ $? -eq 0 ]; then
             echo "✅ Successfully pushed to Kaggle!"
           else
