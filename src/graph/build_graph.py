@@ -22,9 +22,6 @@ def build_transaction_graph(
     ✅ GIỐNG PAPER 100% (Implementation Details Section V-A-4):
     - Node = transaction (mỗi giao dịch là một node)
     - node_type = 0 cho mọi node (vì tất cả đều là transaction)
-    - num_node_types = 1 (SemanticEncoder mặc định)
-    
-    Lưu ý: Theo paper, "each transaction is a node", không phân biệt entity.
     """
     graph_cfg = cfg.get("graph", {})
     ds = cfg.get("dataset", {})
@@ -46,12 +43,7 @@ def build_transaction_graph(
         edge_time_delta = np.concatenate([edge_time_delta, np.zeros(x.shape[0], dtype=np.float32)])
     
     # ============================================================
-    # ✅ GIỐNG PAPER 100%: node = transaction → node_type = 0
-    # ============================================================
-    # Theo Implementation Details (Section V-A-4):
-    # "we construct a transaction graph where EACH TRANSACTION IS A NODE"
-    # Vì vậy tất cả node đều là transaction, không phân biệt entity.
-    # node_type = 0 cho mọi node, num_node_types = 1 (mặc định)
+    # ✅ Tất cả node_type = 0 (transaction nodes)
     # ============================================================
     node_type = torch.zeros(x.shape[0], dtype=torch.long)
     
@@ -60,7 +52,7 @@ def build_transaction_graph(
         y=torch.tensor(y, dtype=torch.long),
         edge_index=edge_index,
         edge_time_delta=torch.tensor(edge_time_delta, dtype=torch.float32),
-        node_type=node_type,  # ✅ Tất cả đều là transaction (type 0)
+        node_type=node_type,
     )
     if times_hours is not None:
         data.node_time = torch.tensor(times_hours, dtype=torch.float32)
@@ -68,12 +60,10 @@ def build_transaction_graph(
 
 
 def save_graph(data: Data, path: str) -> None:
-    """Save graph to disk."""
     with open(path, "wb") as f:
         pickle.dump(data, f)
 
 
 def load_graph(path: str) -> Data:
-    """Load graph from disk."""
     with open(path, "rb") as f:
         return pickle.load(f)
