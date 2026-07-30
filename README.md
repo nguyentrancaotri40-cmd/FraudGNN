@@ -7,9 +7,9 @@ Project này dựng lại pipeline **FraudGNN-RL** dựa trên mô tả trong pa
 
 ---
 
-# Lưu ý khoa học quan trọng
+## 📌 Lưu ý khoa học quan trọng
 
-Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy project này là bản **reproduction from paper description**, tức là tái hiện gần nhất có thể theo thuật toán và thông số được mô tả.
+Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy project này là bản **reproduction from paper description**, tái hiện gần nhất có thể theo thuật toán và thông số được mô tả.
 
 **Code đã được tối ưu để giống paper 100%** về:
 
@@ -19,10 +19,11 @@ Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy proj
 - **Reward Function**: Combination of accuracy and false positive rate
 - **FedAvg Aggregation**: Trung bình có trọng số theo số lượng mẫu (n_i / n_total)
 - **Client Creation** (Algorithm 1): Mỗi client có graph riêng
+- **Graph Alignment** (Section IV.C): Đồng bộ feature giữa các client
 
 ---
 
-# Các điểm bám sát paper
+## ✅ Các điểm bám sát paper
 
 - Dữ liệu giao dịch được biến thành **transaction graph** (theo implementation của paper ở Section V-A-4).
 - Node là transaction trong graph similarity-time.
@@ -38,13 +39,26 @@ Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy proj
   - **NAF** (continuous action) - có thể bật qua config `rl.type: naf`
 - **State** = graph embedding từ TSSGC (giống paper Section IV-B)
 - **Reward** = accuracy - fpr_penalty * fpr (combination of accuracy and FPR)
-- **Federated Learning** với FedAvg có trọng số theo số lượng mẫu (giống paper)
+- **Federated Learning** với FedAvg (giống paper)
 - **Client Creation**: Mỗi client có graph riêng (giống paper Algorithm 1)
-- Metric gồm AUC-ROC, AUC-PR, F1, Recall@1%.
+- **Metric**: AUC-ROC, AUC-PR, F1, Recall@1%
 
 ---
 
-# Cấu trúc thư mục
+## 🛠️ Các lỗi đã được fix
+
+| Lỗi | Mô tả | Trạng thái |
+|------|--------|------------|
+| **#E** | Federated Learning bỏ qua train/test split | ✅ Đã fix |
+| **#A** | Threshold được chọn dựa trên test set | ✅ Đã fix |
+| **#B** | Online adaptation state không cập nhật đúng | ✅ Đã fix |
+| **#C** | State RL chứa mean(y) (label leakage) | ✅ Đã fix |
+| **#D** | Semantic branch bị vô hiệu hóa | ✅ Đã fix |
+| **#F** | GRU sequence bị đảo ngược thời gian | ✅ Đã fix |
+
+---
+
+## 📂 Cấu trúc thư mục
 
 ```text
 FRAUDGNN/
@@ -67,7 +81,7 @@ FRAUDGNN/
 │   ├── graph/                       # Graph building
 │   │   ├── build_graph.py           # Hard edges (baseline)
 │   │   ├── hybrid_graph.py          # Hard + Soft edges (FraudGNN-RL+)
-│   │   ├── soft_behavior_graph.py   # Soft edges
+│   │   ├── soft_behavior_graph.py   # Soft edges (tối ưu FAISS)
 │   │   └── graph_utils.py           # Utils (vectorized hard edges)
 │   ├── models/                      # Models
 │   │   ├── fraudgnn_rl.py           # Main model
@@ -77,7 +91,7 @@ FRAUDGNN/
 │   │   └── naf_agent.py             # NAF agent (continuous)
 │   ├── train/                       # Training logic
 │   │   ├── pipeline_fraudgnn.py     # Main pipeline (entry point)
-│   │   ├── federated.py             # Federated Learning (FedAvg weighted)
+│   │   ├── federated.py             # Federated Learning (FedAvg)
 │   │   ├── train_gnn.py             # TSSGC training
 │   │   └── train_rl.py              # RL training (DQN/NAF)
 │   ├── eval/                        # Evaluation
@@ -97,7 +111,7 @@ FRAUDGNN/
 │   │   ├── run_ablation_full.py
 │   │   └── run_ablation_timing.py
 │   ├── eval/                        # Evaluation scripts
-│   │   ├── compare.py
+│   │   ├── compare.py               # So sánh Baseline vs Hybrid
 │   │   ├── plot.py
 │   │   └── concept_drift_test.py
 │   └── sweep/                       # Hyperparameter sweep
@@ -109,20 +123,13 @@ FRAUDGNN/
 │   └── figures/                     # Plots
 │
 ├── tests/                           # Unit tests
-│   ├── test_graph.py
-│   ├── test_model.py
-│   ├── test_preprocess.py
-│   ├── test_federated.py
-│   ├── test_pruning.py
-│   └── test_pipeline.py
-│
 ├── requirements.txt
 └── README.md
 ```
 
-# Cài đặt
+## 🔧 Cài đặt
 
-## 1. Tạo môi trường ảo
+### 1. Tạo môi trường ảo
 
 ```bash
 python -m venv venv
@@ -130,13 +137,13 @@ source venv/bin/activate       # Linux/Mac
 # venv\Scripts\activate        # Windows
 ```
 
-## 2. Cài dependencies
+### 2. Cài dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## 3. Cài PyTorch với CUDA (nếu có GPU)
+### 3. Cài PyTorch với CUDA (nếu có GPU)
 
 ```bash
 # Xóa PyTorch CPU
@@ -150,77 +157,62 @@ Lưu ý: Nếu torch-geometric bị lỗi, cài theo hướng dẫn chính thứ
 
 ---
 
-# Chuẩn bị dữ liệu
+## 📊 Chuẩn bị dữ liệu
 
 Đặt file dataset vào `data/raw/` và sửa đường dẫn trong file config.
 
-## PaySim
+### PaySim
 
 ```text
 data/raw/paysim_fast.csv
 ```
 
-Config:
+Config: `configs/paysim.yaml`
 
-```text
-configs/paysim.yaml
-```
-
-Lưu ý: PaySim dùng label thật là `isFraud`, không dùng `isFlaggedFraud`.
-
-## Credit Card 2023
+### Credit Card 2023
 
 ```text
 data/raw/creditcard_2023_fast.csv
 ```
 
-Config:
+Config: `configs/creditcard2023.yaml`
 
-```text
-configs/creditcard2023.yaml
-```
-
-## IEEE-CIS
+### IEEE-CIS
 
 ```text
 data/raw/ieee_cis_fast.csv
 ```
 
-Config:
+Config: `configs/ieee_cis.yaml`
 
-```text
-configs/ieee_cis.yaml
-```
+---
 
-# Chạy reproduction
+## 🚀 Chạy reproduction
 
-## Baseline (FraudGNN-RL)
+### Baseline (FraudGNN-RL)
 
 ```bash
 python -m src.main_pipeline --config configs/paysim.yaml
 ```
 
-## Hybrid (FraudGNN-RL+) - với soft edges + weighted fusion
+### Test nhanh (1% data)
+
+```bash
+python -m src.main_pipeline --config configs/test.yaml
+```
+
+### Hybrid (FraudGNN-RL+) - soft edges + weighted fusion
 
 ```bash
 # Sửa flags trong config:
+# soft_edges: true
 # hybrid_graph: true
 # weighted_fusion: true
-# soft_edges: true
 
 python -m src.main_pipeline --config configs/paysim_hybrid.yaml
 ```
 
-## Với NAF (continuous action)
-
-```bash
-# Sửa flags trong config:
-# rl.type: naf
-
-python -m src.main_pipeline --config configs/paysim_naf.yaml
-```
-
-## Ablation Study
+### Ablation Study
 
 ```bash
 python scripts/run/run_ablation_timing.py
@@ -236,7 +228,7 @@ outputs/checkpoints/dqn_threshold_agent.pt
 
 ---
 
-# Pipeline
+## 📈 Pipeline
 
 ```text
 Raw Transaction Data
@@ -250,17 +242,17 @@ Transaction Graph Construction
    └── Soft Edges (hybrid)
         ↓
 TSSGC Encoder
-   ├── Temporal Modeling (GRU + time decay) Giống paper Eq 6-7
-   ├── Spatial Modeling (GAT) Giống paper Eq 8-9
-   └── Semantic Modeling (type embedding) Giống paper Eq 10
+   ├── Temporal Modeling (GRU + time decay) → Eq 6-7
+   ├── Spatial Modeling (GAT) → Eq 8-9
+   └── Semantic Modeling (type embedding) → Eq 10
         ↓
 Classifier Head
         ↓
 Fraud Score
         ↓
-RL Agent (Vanilla DQN / NAF) Giống paper Eq 12
-   ├── State = Graph embedding từ TSSGC Giống paper Section IV-B
-   ├── Reward = Accuracy + FPR Giống paper
+RL Agent (Vanilla DQN / NAF) → Eq 12
+   ├── State = Graph embedding từ TSSGC → Section IV-B
+   ├── Reward = Accuracy + FPR
    └── Threshold Adjustment
         ↓
 Fraud / Legitimate Prediction
@@ -270,9 +262,7 @@ Evaluation
 
 ---
 
-# Metrics
-
-Project tính:
+## 📊 Metrics
 
 - AUC-ROC
 - AUC-PR
@@ -288,21 +278,15 @@ Project tính:
 
 ---
 
-# Kiểm tra nhanh
+## 🧪 Kiểm tra nhanh
 
-## Unit tests
+### Unit tests
 
 ```bash
 python -m pytest tests/ -v
 ```
 
-## Compile check
-
-```bash
-python -m compileall src scripts tests
-```
-
-## Test pipeline với 1% data
+### Test pipeline với 1% data
 
 ```bash
 python -m src.main_pipeline --config configs/test.yaml
@@ -310,7 +294,7 @@ python -m src.main_pipeline --config configs/test.yaml
 
 ---
 
-# Giới hạn của bản reproduction
+## ⚠️ Giới hạn của bản reproduction
 
 Do tác giả chưa public source code, một số chi tiết phải diễn giải kỹ thuật:
 
@@ -320,40 +304,19 @@ Do tác giả chưa public source code, một số chi tiết phải diễn gi�
 
 - DQN sử dụng Vanilla DQN (giống paper Eq 12), không phải Double DQN.
 
-- Reward = accuracy - fpr_penalty * fpr (combination of accuracy and FPR, giống paper).
+- Reward = accuracy - fpr_penalty * fpr (giống paper).
 
-- Federated Learning sử dụng FedAvg với trọng số theo số lượng mẫu (giống paper).
+- Federated Learning sử dụng FedAvg (giống paper).
 
 - Client Creation: Mỗi client có graph riêng (giống paper Algorithm 1).
 
-- NAF (Normalized Advantage Functions) đã được implement để hỗ trợ continuous action space.
-
-- Mặc định dùng DQN với discrete bins (ổn định hơn).
-
-- Có thể bật NAF bằng config:
-
-```yaml
-rl.type: naf
-```
-
-- Feature importance weights đã được implement trong NAF agent.
-
-- Federated Learning được implement với FedAvg, có thể bật bằng config:
-
-```yaml
-flags:
-  federated: true
-```
-
-- Graph builder có `max_neighbors_per_node` để tránh O(N²) bộ nhớ. Đặt `null` nếu muốn exact exhaustive graph trên sample nhỏ.
-
-- Hard-edges builder đã được vector hóa (dùng `NearestNeighbors`), cải thiện tốc độ ~5-10x so với phiên bản vòng lặp cũ.
+- Graph Alignment: Feature projection để đồng bộ các client (Section IV.C).
 
 ---
 
-# Cấu hình chính
+## ⚙️ Cấu hình chính
 
-## Flags
+### Flags
 
 | Flag | Mặc định | Mô tả |
 |------|----------|------|
@@ -366,7 +329,7 @@ flags:
 | pruning | false | Bật pruning |
 | dqn | true | Dùng DQN (nếu rl.type: dqn) |
 
-## RL Config
+### RL Config
 
 | Key | Mặc định | Mô tả |
 |------|----------|------|
@@ -376,7 +339,7 @@ flags:
 
 ---
 
-# Tham khảo
+## 📚 Tham khảo
 
 Paper: FraudGNN-RL: A Graph Neural Network With Reinforcement Learning for Adaptive Financial Fraud Detection
 
@@ -384,7 +347,7 @@ IEEE JOCS 2025
 
 ---
 
-# License
+## 📄 License
 
 MIT License
 
@@ -407,5 +370,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-
