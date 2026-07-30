@@ -21,12 +21,13 @@
 
 flags:
   hard_edges: true
-  soft_edges: true
-  hybrid_graph: true
-  weighted_fusion: true
-  federated: true              # ✅ GIỐNG PAPER (bật FL)
+  soft_edges: false
+  hybrid_graph: false
+  weighted_fusion: false
+  federated: true             
+  rl: true
+  pruning: false
   dqn: true
-  pruning: true
 
 experiment:
   name: test

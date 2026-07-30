@@ -21,8 +21,9 @@ flags:
   hybrid_graph: false
   weighted_fusion: false
   federated: true          # ✅ GIỐNG PAPER
-  dqn: true
+  rl: true
   pruning: false
+  dqn: true
 
 experiment:
   name: paysim_50pct_100epochs

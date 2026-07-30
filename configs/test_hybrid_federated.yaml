@@ -5,8 +5,9 @@ flags:
   hybrid_graph: true          # ✅ BẬT HYBRID
   weighted_fusion: false
   federated: true             # ✅ BẬT FEDERATED
-  dqn: true
+  rl: true
   pruning: false
+  dqn: true
 
 experiment:
   name: test_hybrid_federated

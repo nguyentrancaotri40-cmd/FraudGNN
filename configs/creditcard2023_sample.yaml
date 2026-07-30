@@ -42,7 +42,7 @@ dataset:
   time_col: id
   time_unit: index
   sample_frac: 0.3         # ✅ Tăng lên 30% để học tốt hơn
-  stratified_sampling: true   # ✅ GIỐNG PAPER
+  stratified_sampling: false   # ??? cần check
   random_state: 42
 
 split:

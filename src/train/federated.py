@@ -590,6 +590,9 @@ def create_federated_clients_from_different_datasets(
     return clients
 
 
+# ============================================================
+# ⚠️ HÀM NÀY KHÔNG CÒN ĐƯỢC SỬ DỤNG (GIỮ LẠI ĐỂ THAM KHẢO)
+# ============================================================
 def create_federated_clients_from_single_dataset(
     cfg: Dict[str, Any],
     model_class: nn.Module,
@@ -597,6 +600,11 @@ def create_federated_clients_from_single_dataset(
     device: str = "cpu",
     alignment_method: str = "none",
 ) -> List[FederatedClient]:
+    """
+    ⚠️ DEPRECATED: Hàm này gây data leakage vì đọc lại raw dataset.
+    Hiện tại không còn được sử dụng trong pipeline chính.
+    Giữ lại để tham khảo hoặc dùng cho mục đích debug.
+    """
     from src.data.load_data import load_dataset
     from src.data.preprocess import FraudPreprocessor
     from src.graph.build_graph import build_transaction_graph
@@ -655,6 +663,9 @@ def create_federated_clients_from_single_dataset(
     return clients
 
 
+# ============================================================
+# ✅ FIX LỖI #E: Hàm create_federated_clients được sửa lại
+# ============================================================
 def create_federated_clients(
     data,
     cfg: Dict[str, Any],
@@ -662,42 +673,71 @@ def create_federated_clients(
     num_clients: int = 3,
     device: str = "cpu",
 ) -> List[FederatedClient]:
+    """
+    ✅ FIX LỖI #E: Chia graph TRAIN đã có sẵn — không đọc lại raw dataset.
+    
+    Lỗi cũ: Hàm này đọc lại toàn bộ raw dataset từ cfg["dataset"]["path"],
+    dẫn đến FL client được train trên cả validation và test set.
+    
+    Fix: Sử dụng data (train_data) đã được split từ pipeline_fraudgnn.py
+    để tạo client shards.
+    """
     fed_cfg = cfg.get("federated", {})
     alignment_method = fed_cfg.get("alignment_method", "feature_projection")
     
-    raw_data_dir = cfg.get("dataset", {}).get("path", "data/raw")
+    # ============================================================
+    # ✅ SỬA: Dùng data (train_data) thay vì đọc lại raw dataset
+    # ============================================================
+    num_nodes = data.x.size(0)
     
-    clients = create_federated_clients_from_raw_data(
-        Path(raw_data_dir).parent,
-        cfg,
-        model_class,
-        num_clients,
-        device,
-        alignment_method=alignment_method,
-    )
+    # Sắp xếp theo thời gian nếu có
+    if hasattr(data, "node_time"):
+        order = torch.argsort(data.node_time)
+    else:
+        order = torch.arange(num_nodes, device=data.x.device)
     
-    if clients:
-        return clients
+    shard_size = num_nodes // num_clients
+    clients = []
+    client_graphs = []
     
-    dataset_paths = cfg.get("federated", {}).get("dataset_paths", [])
-    if dataset_paths:
-        clients = create_federated_clients_from_different_datasets(
-            dataset_paths,
-            cfg,
-            model_class,
-            device,
+    for client_id in range(num_clients):
+        start = client_id * shard_size
+        end = start + shard_size if client_id < num_clients - 1 else num_nodes
+        
+        # Lấy subset của graph
+        idx = order[start:end]
+        
+        # Tạo subgraph từ train_data
+        client_data = data.subgraph(idx)
+        client_graphs.append(client_data)
+        
+        print(f"[Federated] Client {client_id}: {client_data.x.size(0)} samples "
+              f"(time {start} to {end})")
+    
+    # ============================================================
+    # Áp dụng graph alignment nếu cần
+    # ============================================================
+    if alignment_method != "none" and client_graphs:
+        client_graphs = align_client_graphs(
+            client_graphs,
             alignment_method=alignment_method,
+            shared_dim=cfg.get("model", {}).get("hidden_dim", 64),
         )
-        if clients:
-            return clients
     
-    return create_federated_clients_from_single_dataset(
-        cfg,
-        model_class,
-        num_clients,
-        device,
-        alignment_method=alignment_method,
-    )
+    # ============================================================
+    # Tạo FederatedClient objects
+    # ============================================================
+    for client_id, graph in enumerate(client_graphs):
+        client = FederatedClient(
+            client_id=client_id,
+            data=graph,
+            cfg=cfg,
+            model_class=model_class,
+            device=device,
+        )
+        clients.append(client)
+    
+    return clients
 
 
 def train_federated(

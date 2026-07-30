@@ -517,8 +517,6 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
     val_metrics = classification_metrics(val_labels, val_scores, threshold=best_threshold)
     test_metrics = classification_metrics(test_labels, test_scores, threshold=best_threshold)
     
-    baseline_metrics = classification_metrics(test_labels, test_scores, threshold=0.5)
-    
     timing["inference_sec"] = time.perf_counter() - start
     print(f"[TIMING] Evaluation done in {timing['inference_sec']:.2f}s")
     
@@ -537,26 +535,88 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
         )
     
     # ============================================================
-    # 6. ✅ PRINT COMPARISON (GIỐNG PAPER TABLE 2)
+    # 6. ✅ BENCHMARK: PAPER vs REPRODUCTION (GIỐNG PAPER TABLE 2)
     # ============================================================
+    # ✅ FIX: Hỗ trợ nhiều tên dataset khác nhau
+    # Số liệu từ paper (Table 2) - CHỈ DÙNG 4 METRIC CÓ SẴN
+    PAPER_METRICS = {
+        # PaySim - hỗ trợ cả 2 cách viết
+        'PaySim': {'auc_roc': 0.995, 'auc_pr': 0.647, 'f1': 0.923, 'recall': 0.973},
+        'paysim':  {'auc_roc': 0.995, 'auc_pr': 0.647, 'f1': 0.923, 'recall': 0.973},
+        
+        # Credit Card 2023
+        'creditcard':   {'auc_roc': 0.996, 'auc_pr': 0.652, 'f1': 0.928, 'recall': 0.978},
+        'CreditCard':   {'auc_roc': 0.996, 'auc_pr': 0.652, 'f1': 0.928, 'recall': 0.978},
+        'CreditCard2023': {'auc_roc': 0.996, 'auc_pr': 0.652, 'f1': 0.928, 'recall': 0.978},
+        
+        # IEEE-CIS
+        'ieee':     {'auc_roc': 0.995, 'auc_pr': 0.649, 'f1': 0.925, 'recall': 0.969},
+        'IEEE':     {'auc_roc': 0.995, 'auc_pr': 0.649, 'f1': 0.925, 'recall': 0.969},
+        'IEEE-CIS': {'auc_roc': 0.995, 'auc_pr': 0.649, 'f1': 0.925, 'recall': 0.969},
+    }
+
+    dataset_name = cfg.get('experiment', {}).get('dataset', 'unknown')
+
     print(f"\n{'='*80}")
-    print(f"[BENCHMARK] FraudGNN-RL vs Baseline (giống paper Table 2)")
+    print(f"[BENCHMARK] PAPER vs REPRODUCTION - {dataset_name}")
     print(f"{'='*80}")
-    print(f"{'Metric':<15} {'Baseline':<20} {'FraudGNN-RL':<20} {'Delta':<15}")
-    print(f"{'-'*80}")
-    
-    for metric in ['auc_roc', 'auc_pr', 'f1', 'recall', 'precision', 'fpr']:
-        base_val = baseline_metrics.get(metric, 0)
-        ours_val = test_metrics.get(metric, 0)
-        delta = ours_val - base_val
-        arrow = '↑' if delta > 0 else '↓'
-        if metric == 'fpr':
-            arrow = '↓' if delta < 0 else '↑'
-            delta = -delta
-        print(f"{metric:<15} {base_val:<20.4f} {ours_val:<20.4f} {arrow}{abs(delta):<14.4f}")
-    
+    print(f"📌 Paper: Cui et al., IEEE JOCS 2025 (Table 2)")
+    print(f"📌 Reproduction: Your implementation")
     print(f"{'='*80}")
-    print(f"Selected threshold: {best_threshold:.4f} (from validation set)")
+
+    if dataset_name in PAPER_METRICS:
+        paper = PAPER_METRICS[dataset_name]
+        repro = test_metrics
+        
+        print(f"{'Metric':<15} {'Paper':<20} {'Reproduction':<20} {'Delta':<15}")
+        print("-"*80)
+        
+        # Metric name mapping
+        metric_names = {
+            'auc_roc': 'AUC-ROC',
+            'auc_pr': 'AUC-PR',
+            'f1': 'F1',
+            'recall': 'Recall@1%'
+        }
+        
+        for metric in ['auc_roc', 'auc_pr', 'f1', 'recall']:
+            paper_val = paper.get(metric, 0)
+            repro_val = repro.get(metric, 0)
+            delta = repro_val - paper_val
+            
+            if delta > 0:
+                arrow = "✅"
+            elif delta < 0:
+                arrow = "⚠️"
+            else:
+                arrow = "="
+            
+            display_name = metric_names.get(metric, metric)
+            print(f"{display_name:<15} {paper_val:<20.4f} {repro_val:<20.4f} {arrow}{abs(delta):<14.4f}")
+        
+        print(f"{'='*80}")
+        print(f"Selected threshold: {best_threshold:.4f} (from validation set)")
+        
+        # Kết luận
+        f1_delta = repro.get('f1', 0) - paper.get('f1', 0)
+        if abs(f1_delta) < 0.01:
+            print("📊 Reproduction F1 matches Paper (within ±0.01) ✅")
+        elif f1_delta > 0:
+            print(f"📊 Reproduction F1 is {f1_delta*100:.1f}% HIGHER than Paper ✅")
+        else:
+            print(f"📊 Reproduction F1 is {abs(f1_delta)*100:.1f}% LOWER than Paper ⚠️")
+        
+        recall_delta = repro.get('recall', 0) - paper.get('recall', 0)
+        if abs(recall_delta) < 0.01:
+            print("📊 Reproduction Recall@1% matches Paper (within ±1%) ✅")
+        elif recall_delta > 0:
+            print(f"📊 Reproduction Recall@1% is {recall_delta*100:.1f}% HIGHER than Paper ✅")
+        else:
+            print(f"📊 Reproduction Recall@1% is {abs(recall_delta)*100:.1f}% LOWER than Paper ⚠️")
+        
+    else:
+        print(f"⚠️ Dataset '{dataset_name}' not found in PAPER_METRICS")
+        print("Available: PaySim, paysim, creditcard, CreditCard, CreditCard2023, ieee, IEEE, IEEE-CIS")
     
     # ============================================================
     # 7. LATENCY & MEMORY
@@ -612,7 +672,6 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "selected_threshold": best_threshold,
         "val_metrics": val_metrics,
         "test_metrics": test_metrics,
-        "baseline_metrics": baseline_metrics,
         "runtime": timing,
         "num_samples": num_samples,
         "latency": latency_metrics,

@@ -191,6 +191,9 @@ class BatchThresholdEnvironment:
     def _state_for_current_batch(self) -> np.ndarray:
         """
         ✅ GIỐNG PAPER: State = graph embedding từ TSSGC
+        
+        ✅ FIX LỖI #C: Loại bỏ mean(y) khỏi state để tránh label leakage.
+        Paper định nghĩa State = Graph Embedding từ TSSGC, không bao gồm label.
         """
         s, y = self._batch()
         if len(s) == 0:
@@ -203,13 +206,13 @@ class BatchThresholdEnvironment:
             state = np.mean(batch_embeddings, axis=0)
             return state.astype(np.float32)
         
-        # Fallback (không khuyến nghị cho reproduction)
+        # ✅ FIX: Fallback state KHÔNG chứa mean(y) - loại bỏ label leakage
+        # State chỉ dùng thông tin từ scores và threshold, không dùng label thật
         return np.array([
             float(np.mean(s)),
             float(np.std(s)),
             float(np.min(s)),
             float(np.max(s)),
-            float(np.mean(y)),
             float(len(s) / max(1, len(self.scores))),
             float(self.current_threshold),
         ], dtype=np.float32)

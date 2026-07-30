@@ -21,8 +21,9 @@ flags:
   hybrid_graph: false
   weighted_fusion: false
   federated: true          # ✅ GIỐNG PAPER
-  dqn: true
+  rl: true
   pruning: false
+  dqn: true
 
 experiment:
   name: creditcard_50pct_100epochs
@@ -36,7 +37,7 @@ dataset:
   time_col: id
   time_unit: index
   sample_frac: 0.5         # ✅ Giảm data để chạy (paper ko quy định)
-  stratified_sampling: true   # ✅ GIỐNG PAPER: random sampling giữ tỷ lệ
+  stratified_sampling: false   # ??? cần check
   random_state: 42
 
 split:
