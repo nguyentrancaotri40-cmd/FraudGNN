@@ -7,7 +7,7 @@ Project này dựng lại pipeline **FraudGNN-RL** dựa trên mô tả trong pa
 
 ---
 
-## 📌 Lưu ý khoa học quan trọng
+## Lưu ý khoa học quan trọng
 
 Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy project này là bản **reproduction from paper description**, tái hiện gần nhất có thể theo thuật toán và thông số được mô tả.
 
@@ -23,7 +23,7 @@ Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy proj
 
 ---
 
-## ✅ Các điểm bám sát paper
+## Các điểm bám sát paper
 
 - Dữ liệu giao dịch được biến thành **transaction graph** (theo implementation của paper ở Section V-A-4).
 - Node là transaction trong graph similarity-time.
@@ -45,20 +45,20 @@ Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy proj
 
 ---
 
-## 🛠️ Các lỗi đã được fix
+## Các lỗi đã được fix
 
 | Lỗi | Mô tả | Trạng thái |
 |------|--------|------------|
-| **#E** | Federated Learning bỏ qua train/test split | ✅ Đã fix |
-| **#A** | Threshold được chọn dựa trên test set | ✅ Đã fix |
-| **#B** | Online adaptation state không cập nhật đúng | ✅ Đã fix |
-| **#C** | State RL chứa mean(y) (label leakage) | ✅ Đã fix |
-| **#D** | Semantic branch bị vô hiệu hóa | ✅ Đã fix |
-| **#F** | GRU sequence bị đảo ngược thời gian | ✅ Đã fix |
+| **#E** | Federated Learning bỏ qua train/test split |  Đã fix |
+| **#A** | Threshold được chọn dựa trên test set |  Đã fix |
+| **#B** | Online adaptation state không cập nhật đúng |  Đã fix |
+| **#C** | State RL chứa mean(y) (label leakage) |  Đã fix |
+| **#D** | Semantic branch bị vô hiệu hóa |  Đã fix |
+| **#F** | GRU sequence bị đảo ngược thời gian |  Đã fix |
 
 ---
 
-## 📂 Cấu trúc thư mục
+## Cấu trúc thư mục
 
 ```text
 FRAUDGNN/
@@ -127,7 +127,7 @@ FRAUDGNN/
 └── README.md
 ```
 
-## 🔧 Cài đặt
+## Cài đặt
 
 ### 1. Tạo môi trường ảo
 
@@ -157,7 +157,7 @@ Lưu ý: Nếu torch-geometric bị lỗi, cài theo hướng dẫn chính thứ
 
 ---
 
-## 📊 Chuẩn bị dữ liệu
+## Chuẩn bị dữ liệu
 
 Đặt file dataset vào `data/raw/` và sửa đường dẫn trong file config.
 
@@ -187,7 +187,7 @@ Config: `configs/ieee_cis.yaml`
 
 ---
 
-## 🚀 Chạy reproduction
+## Chạy reproduction
 
 ### Baseline (FraudGNN-RL)
 
@@ -228,7 +228,7 @@ outputs/checkpoints/dqn_threshold_agent.pt
 
 ---
 
-## 📈 Pipeline
+## Pipeline
 
 ```text
 Raw Transaction Data
@@ -262,7 +262,7 @@ Evaluation
 
 ---
 
-## 📊 Metrics
+## Metrics
 
 - AUC-ROC
 - AUC-PR
@@ -278,7 +278,7 @@ Evaluation
 
 ---
 
-## 🧪 Kiểm tra nhanh
+## Kiểm tra nhanh
 
 ### Unit tests
 
@@ -294,7 +294,7 @@ python -m src.main_pipeline --config configs/test.yaml
 
 ---
 
-## ⚠️ Giới hạn của bản reproduction
+## Giới hạn của bản reproduction
 
 Do tác giả chưa public source code, một số chi tiết phải diễn giải kỹ thuật:
 
@@ -314,7 +314,7 @@ Do tác giả chưa public source code, một số chi tiết phải diễn gi�
 
 ---
 
-## ⚙️ Cấu hình chính
+## Cấu hình chính
 
 ### Flags
 
@@ -339,7 +339,7 @@ Do tác giả chưa public source code, một số chi tiết phải diễn gi�
 
 ---
 
-## 📚 Tham khảo
+## Tham khảo
 
 Paper: FraudGNN-RL: A Graph Neural Network With Reinforcement Learning for Adaptive Financial Fraud Detection
 
@@ -347,7 +347,7 @@ IEEE JOCS 2025
 
 ---
 
-## 📄 License
+## License
 
 MIT License
 
