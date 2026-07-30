@@ -6,7 +6,6 @@ import pickle
 import numpy as np
 import torch
 from torch_geometric.data import Data
-import warnings
 
 from .graph_utils import normalize_time_to_hours, temporal_similarity_edges, make_edge_tensors
 
@@ -16,23 +15,16 @@ def build_transaction_graph(
     y: np.ndarray,
     time_values: np.ndarray | None,
     cfg: Dict[str, Any],
-    entity_types: np.ndarray | None = None,  # ✅ Thêm tham số entity_types
 ) -> Data:
-    """Create a PyG transaction graph for FraudGNN-RL reproduction.
-
-    Node = transaction.
-    Node feature = preprocessed transaction vector.
-    Edge = temporal+feature-similarity relation between transactions.
-    Label = fraud/legitimate label per transaction node.
+    """
+    Create a PyG transaction graph for FraudGNN-RL reproduction.
     
-    Args:
-        x: Node features
-        y: Node labels
-        time_values: Time values for each node
-        cfg: Configuration dictionary
-        entity_types: Optional array of entity types (User/Merchant/Bank/...)
-            If provided, used for Semantic branch (Eq 10).
-            If None, creates 3 artificial types to enable Semantic branch.
+    ✅ GIỐNG PAPER 100% (Implementation Details Section V-A-4):
+    - Node = transaction (mỗi giao dịch là một node)
+    - node_type = 0 cho mọi node (vì tất cả đều là transaction)
+    - num_node_types = 1 (SemanticEncoder mặc định)
+    
+    Lưu ý: Theo paper, "each transaction is a node", không phân biệt entity.
     """
     graph_cfg = cfg.get("graph", {})
     ds = cfg.get("dataset", {})
@@ -54,32 +46,21 @@ def build_transaction_graph(
         edge_time_delta = np.concatenate([edge_time_delta, np.zeros(x.shape[0], dtype=np.float32)])
     
     # ============================================================
-    # ✅ FIX LỖI #D: Kích hoạt Semantic branch với node types
+    # ✅ GIỐNG PAPER 100%: node = transaction → node_type = 0
     # ============================================================
-    if entity_types is not None:
-        # ✅ Dùng entity types thực tế
-        node_type = torch.tensor(entity_types, dtype=torch.long)
-        num_types = len(np.unique(entity_types))
-        print(f"[GRAPH] Using {num_types} node types from entity_types")
-    else:
-        # ✅ Fallback: Tạo 3 artificial types để kích hoạt Semantic branch
-        # Paper Eq 10: SEM(i) = W_m[h_i || e_type(i)] - cần ít nhất 2 types
-        # để e_type(i) không phải hằng số
-        warnings.warn(
-            "[GRAPH] entity_types not provided. Using 3 artificial types (User/Merchant/Bank) "
-            "to enable Semantic branch (Eq 10). For real data, provide actual entity types.",
-            UserWarning
-        )
-        # Tạo 3 types luân phiên: 0, 1, 2, 0, 1, 2, ...
-        node_type = torch.tensor([i % 3 for i in range(x.shape[0])], dtype=torch.long)
-        print(f"[GRAPH] Using artificial 3 node types to enable Semantic branch")
+    # Theo Implementation Details (Section V-A-4):
+    # "we construct a transaction graph where EACH TRANSACTION IS A NODE"
+    # Vì vậy tất cả node đều là transaction, không phân biệt entity.
+    # node_type = 0 cho mọi node, num_node_types = 1 (mặc định)
+    # ============================================================
+    node_type = torch.zeros(x.shape[0], dtype=torch.long)
     
     data = Data(
         x=torch.tensor(x, dtype=torch.float32),
         y=torch.tensor(y, dtype=torch.long),
         edge_index=edge_index,
         edge_time_delta=torch.tensor(edge_time_delta, dtype=torch.float32),
-        node_type=node_type,  # ✅ SỬA: Dùng node_type từ tham số
+        node_type=node_type,  # ✅ Tất cả đều là transaction (type 0)
     )
     if times_hours is not None:
         data.node_time = torch.tensor(times_hours, dtype=torch.float32)
