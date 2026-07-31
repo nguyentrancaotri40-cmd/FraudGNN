@@ -141,7 +141,7 @@ model:
   hidden_dim: 64
   num_layers: 3
   dropout: 0.20
-  num_node_types: 1
+  num_node_types: 3
 
 train:
   epochs: 100                      # ✅ GIỮ NGUYÊN (giống paper)

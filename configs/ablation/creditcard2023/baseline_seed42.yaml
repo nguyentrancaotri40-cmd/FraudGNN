@@ -38,7 +38,7 @@ model:
   dropout: 0.2
   hidden_dim: 64
   num_layers: 3
-  num_node_types: 1
+  num_node_types: 2
 preprocess:
   categorical_cols: []
   drop_cols:

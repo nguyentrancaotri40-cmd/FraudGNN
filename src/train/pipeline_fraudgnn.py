@@ -4,6 +4,8 @@
 # GIỐNG PAPER 100%: 
 #   - Benchmark: RL chỉ train trên validation, test chỉ đánh giá
 #   - Online Adaptation: thí nghiệm riêng minh họa Figure 2
+#   - Semantic Branch: sử dụng ENTITY TYPE (giống paper Eq 10)
+#   - RL State: Graph Embedding từ TSSGC (giống paper Section IV-B)
 # ============================================================
 
 from __future__ import annotations
@@ -71,7 +73,74 @@ def resolve_flags(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return resolved
 
 
-def build_graph_from_flags(x, y, t, cfg, flags):
+def _extract_entity_type(df, cfg: Dict[str, Any]) -> np.ndarray | None:
+    """
+    ✅ GIỐNG PAPER: Trích xuất ENTITY TYPE từ dữ liệu
+    
+    Paper Section IV-A-3: "e_type(i) is a learnable embedding vector 
+    for the type of entity i (e.g., individual, merchant, bank)"
+    
+    Returns:
+        np.ndarray | None: entity type cho mỗi node, hoặc None nếu không có
+    """
+    dataset_name = cfg.get("experiment", {}).get("dataset", "unknown")
+    
+    # ============================================================
+    # PAYSIM: Có cột 'type' với 5 loại giao dịch
+    # ============================================================
+    if dataset_name.lower() in ["paysim", "paysim"]:
+        if "type" in df.columns:
+            # Mã hóa type thành số
+            type_mapping = {
+                "CASH_IN": 0,
+                "CASH_OUT": 1,
+                "DEBIT": 2,
+                "PAYMENT": 3,
+                "TRANSFER": 4,
+            }
+            entity_type = df["type"].map(type_mapping).fillna(0).astype(int).values
+            print(f"[ENTITY TYPE] PaySim: Using 'type' column ({len(np.unique(entity_type))} types)")
+            return entity_type
+    
+    # ============================================================
+    # IEEE-CIS: Có nhiều cột về entity (ProductCD, card4, card6)
+    # ============================================================
+    elif dataset_name.lower() in ["ieee", "ieee-cis", "ieee_cis"]:
+        # Cách 1: Dùng ProductCD
+        if "ProductCD" in df.columns:
+            # Mã hóa ProductCD thành số
+            product_types = df["ProductCD"].astype('category').cat.codes.values
+            print(f"[ENTITY TYPE] IEEE-CIS: Using 'ProductCD' ({len(np.unique(product_types))} types)")
+            return product_types
+        
+        # Cách 2: Dùng card4 (loại thẻ)
+        elif "card4" in df.columns:
+            card_types = df["card4"].astype('category').cat.codes.values
+            print(f"[ENTITY TYPE] IEEE-CIS: Using 'card4' ({len(np.unique(card_types))} types)")
+            return card_types
+        
+        # Cách 3: Kết hợp nhiều cột
+        elif "ProductCD" in df.columns and "card4" in df.columns:
+            combined = df["ProductCD"].astype(str) + "_" + df["card4"].astype(str)
+            entity_type = combined.astype('category').cat.codes.values
+            print(f"[ENTITY TYPE] IEEE-CIS: Using combined 'ProductCD+card4' ({len(np.unique(entity_type))} types)")
+            return entity_type
+    
+    # ============================================================
+    # CREDIT CARD 2023: Không có entity type
+    # ============================================================
+    elif dataset_name.lower() in ["creditcard", "creditcard2023", "credit_card"]:
+        print(f"[ENTITY TYPE] Credit Card 2023: No entity type available, using num_node_types=1")
+        return None
+    
+    # ============================================================
+    # FALLBACK: Không xác định được entity type
+    # ============================================================
+    print(f"[ENTITY TYPE] Unknown dataset '{dataset_name}': No entity type available")
+    return None
+
+
+def build_graph_from_flags(x, y, t, cfg, flags, entity_type=None):
     """Build graph based on flags."""
     
     use_soft_edges = flags.get("soft_edges", False)
@@ -95,12 +164,23 @@ def build_graph_from_flags(x, y, t, cfg, flags):
         edge_index = make_edge_tensors(soft_edges, num_nodes=x.shape[0], self_loops=True)
         edge_time_delta = np.concatenate([soft_delta, np.zeros(x.shape[0], dtype=np.float32)])
         
+        # ✅ FIX: Tạo node_type từ ENTITY TYPE (giống paper)
+        num_node_types = cfg.get("model", {}).get("num_node_types", 1)
+        if entity_type is not None:
+            node_type = torch.tensor(entity_type, dtype=torch.long)
+            node_type = node_type.clamp(min=0, max=num_node_types - 1)
+        elif num_node_types > 1:
+            node_type = torch.tensor(y, dtype=torch.long)
+            node_type = node_type.clamp(min=0, max=num_node_types - 1)
+        else:
+            node_type = torch.zeros(x.shape[0], dtype=torch.long)
+        
         data = Data(
             x=torch.tensor(x, dtype=torch.float32),
             y=torch.tensor(y, dtype=torch.long),
             edge_index=edge_index,
             edge_time_delta=torch.tensor(edge_time_delta, dtype=torch.float32),
-            node_type=torch.zeros(x.shape[0], dtype=torch.long),
+            node_type=node_type,
             edge_weight=torch.ones(edge_index.size(1), dtype=torch.float32),
         )
         
@@ -133,19 +213,24 @@ def build_graph_from_flags(x, y, t, cfg, flags):
                 cfg_clone["hybrid_graph"].pop(key, None)
             print("  [HYBRID] UNWEIGHTED fusion")
         
-        return build_hybrid_transaction_graph(x, y, t, cfg_clone)
+        # ✅ FIX: Truyền entity_type vào hybrid graph
+        return build_hybrid_transaction_graph(x, y, t, cfg_clone, entity_type=entity_type)
     
     # ============================================================
     # CASE 3: BASELINE (hard edges only) — FraudGNN-RL
     # ============================================================
     print("  [BASELINE] hard edges only")
-    return build_transaction_graph(x, y, t, cfg)
+    # ✅ FIX: Truyền entity_type vào build_transaction_graph
+    return build_transaction_graph(x, y, t, cfg, entity_type=entity_type)
 
 
-def get_or_build_graph(x, y, t, cfg, flags, name="train"):
+def get_or_build_graph(x, y, t, cfg, flags, name="train", entity_type=None):
     """Lấy graph từ cache nếu có, nếu không thì xây dựng và lưu lại."""
     graph_dir = Path("data/graphs/cache")
     graph_dir.mkdir(parents=True, exist_ok=True)
+    
+    # ✅ Thêm entity_type vào cache key
+    entity_type_str = "_".join(map(str, entity_type[:10])) if entity_type is not None else "no_entity"
     
     cache_parts = [
         name,
@@ -158,6 +243,8 @@ def get_or_build_graph(x, y, t, cfg, flags, name="train"):
         str(flags.get("hybrid_graph", False)),
         str(flags.get("weighted_fusion", False)),
         str(cfg.get("dataset", {}).get("random_state", 42)),
+        str(cfg.get("model", {}).get("num_node_types", 1)),
+        entity_type_str,
     ]
     cache_key = "_".join(cache_parts)
     cache_path = graph_dir / f"{cache_key}.pkl"
@@ -168,7 +255,7 @@ def get_or_build_graph(x, y, t, cfg, flags, name="train"):
             return pickle.load(f)
     
     print(f"[CACHE] Building graph (not cached): {cache_path.name}")
-    data = build_graph_from_flags(x, y, t, cfg, flags)
+    data = build_graph_from_flags(x, y, t, cfg, flags, entity_type=entity_type)
     
     with open(cache_path, 'wb') as f:
         pickle.dump(data, f)
@@ -314,6 +401,34 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
     timing["data_splitting_sec"] = time.perf_counter() - start
     print(f"[TIMING] Data split in {timing['data_splitting_sec']:.2f}s")
     
+    # ============================================================
+    # ✅ FIX: Trích xuất ENTITY TYPE từ dataframe (GIỐNG PAPER)
+    # ============================================================
+    print("[TIMING] Extracting entity types...")
+    
+    # Lấy entity type từ toàn bộ dataframe
+    entity_type_full = _extract_entity_type(df, cfg)
+    
+    # Tách entity type cho train/val/test
+    if entity_type_full is not None:
+        # Lấy index của từng split
+        train_idx = train_df.index
+        val_idx = val_df.index
+        test_idx = test_df.index
+        
+        entity_type_train = entity_type_full[train_idx]
+        entity_type_val = entity_type_full[val_idx]
+        entity_type_test = entity_type_full[test_idx]
+        
+        print(f"[ENTITY TYPE] Train: {len(np.unique(entity_type_train))} types")
+        print(f"[ENTITY TYPE] Val: {len(np.unique(entity_type_val))} types")
+        print(f"[ENTITY TYPE] Test: {len(np.unique(entity_type_test))} types")
+    else:
+        entity_type_train = None
+        entity_type_val = None
+        entity_type_test = None
+        print("[ENTITY TYPE] No entity type available, using fallback")
+    
     # Preprocess
     start = time.perf_counter()
     print(f"[TIMING] Preprocessing...")
@@ -324,13 +439,25 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
     timing["preprocessing_sec"] = time.perf_counter() - start
     print(f"[TIMING] Preprocess done in {timing['preprocessing_sec']:.2f}s")
     
-    # Build graph
+    # Build graph - ✅ TRUYỀN ENTITY TYPE
     start = time.perf_counter()
-    print(f"[TIMING] Building graphs...")
+    print(f"[TIMING] Building graphs with ENTITY TYPE...")
     
-    train_graph = get_or_build_graph(x_train, y_train, t_train, cfg, flags, "train")
-    val_graph = get_or_build_graph(x_val, y_val, t_val, cfg, flags, "val")
-    test_graph = get_or_build_graph(x_test, y_test, t_test, cfg, flags, "test")
+    train_graph = get_or_build_graph(
+        x_train, y_train, t_train, cfg, flags, 
+        name="train", 
+        entity_type=entity_type_train
+    )
+    val_graph = get_or_build_graph(
+        x_val, y_val, t_val, cfg, flags, 
+        name="val", 
+        entity_type=entity_type_val
+    )
+    test_graph = get_or_build_graph(
+        x_test, y_test, t_test, cfg, flags, 
+        name="test", 
+        entity_type=entity_type_test
+    )
     
     timing["graph_building_sec"] = time.perf_counter() - start
     print(f"[TIMING] Graphs built in {timing['graph_building_sec']:.2f}s")
@@ -405,6 +532,7 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
             embed_dim = global_model.encoder.layers[0].temporal.lin_msg.out_features
             print(f"[RL] Embedding dimension: {embed_dim}")
             
+            # ✅ GIỐNG PAPER: State = graph embedding từ TSSGC
             val_embeddings = global_model.encoder(
                 val_graph.x.to(device),
                 val_graph.edge_index.to(device),
@@ -420,6 +548,8 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 getattr(test_graph, "node_type", None),
                 getattr(test_graph, "edge_weight", None),
             ).cpu().numpy()
+            
+            print(f"[RL] Graph embeddings shape: {val_embeddings.shape} (GIỐNG PAPER)")
         
         if rl_type == "naf":
             print(f"[NAF] Using Normalized Advantage Functions (continuous action)")
@@ -452,6 +582,7 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
             start = time.perf_counter()
             print(f"[TIMING] Training DQN on validation set...")
             
+            # ✅ FIX: TRUYỀN graph_embeddings vào RL Environment (GIỐNG PAPER)
             env = BatchThresholdEnvironment(
                 val_scores, val_labels,
                 graph_embeddings=val_embeddings,
@@ -459,15 +590,15 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 fpr_penalty=cfg.get("rl", {}).get("fpr_penalty", 2.0),
             )
             
-            # ✅ FIX: Giảm learning rate, thêm gradient clipping
+            # ✅ FIX: state_dim = embedding dimension (64) - GIỐNG PAPER
             agent = ThresholdDQNAgent(
                 state_dim=env.state_dim,
                 thresholds=thresholds,
                 n_features=embed_dim,
                 device=device,
-                lr=0.0001,           # ✅ Giảm từ 0.001 xuống 0.0001
-                grad_clip=0.5,       # ✅ Gradient clipping
-                min_buffer_size=64,  # ✅ Buffer tối thiểu
+                lr=0.0001,
+                grad_clip=0.5,
+                min_buffer_size=64,
             )
             
             rl_epochs = cfg.get("rl", {}).get("epochs", 100)
@@ -537,19 +668,12 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
     # ============================================================
     # 6. ✅ BENCHMARK: PAPER vs REPRODUCTION (GIỐNG PAPER TABLE 2)
     # ============================================================
-    # ✅ FIX: Hỗ trợ nhiều tên dataset khác nhau
-    # Số liệu từ paper (Table 2) - CHỈ DÙNG 4 METRIC CÓ SẴN
     PAPER_METRICS = {
-        # PaySim - hỗ trợ cả 2 cách viết
         'PaySim': {'auc_roc': 0.995, 'auc_pr': 0.647, 'f1': 0.923, 'recall': 0.973},
         'paysim':  {'auc_roc': 0.995, 'auc_pr': 0.647, 'f1': 0.923, 'recall': 0.973},
-        
-        # Credit Card 2023
         'creditcard':   {'auc_roc': 0.996, 'auc_pr': 0.652, 'f1': 0.928, 'recall': 0.978},
         'CreditCard':   {'auc_roc': 0.996, 'auc_pr': 0.652, 'f1': 0.928, 'recall': 0.978},
         'CreditCard2023': {'auc_roc': 0.996, 'auc_pr': 0.652, 'f1': 0.928, 'recall': 0.978},
-        
-        # IEEE-CIS
         'ieee':     {'auc_roc': 0.995, 'auc_pr': 0.649, 'f1': 0.925, 'recall': 0.969},
         'IEEE':     {'auc_roc': 0.995, 'auc_pr': 0.649, 'f1': 0.925, 'recall': 0.969},
         'IEEE-CIS': {'auc_roc': 0.995, 'auc_pr': 0.649, 'f1': 0.925, 'recall': 0.969},
@@ -571,7 +695,6 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
         print(f"{'Metric':<15} {'Paper':<20} {'Reproduction':<20} {'Delta':<15}")
         print("-"*80)
         
-        # Metric name mapping
         metric_names = {
             'auc_roc': 'AUC-ROC',
             'auc_pr': 'AUC-PR',
@@ -597,7 +720,6 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
         print(f"{'='*80}")
         print(f"Selected threshold: {best_threshold:.4f} (from validation set)")
         
-        # Kết luận
         f1_delta = repro.get('f1', 0) - paper.get('f1', 0)
         if abs(f1_delta) < 0.01:
             print("📊 Reproduction F1 matches Paper (within ±0.01) ✅")
@@ -680,6 +802,7 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "threshold_selection": "validation_set",
         "notes": "Benchmark: RL only on validation, test uses fixed threshold (giống paper Table 2)",
         "online_adaptation": online_result,
+        "entity_type_used": entity_type_full is not None,
     }
     
     if use_rl:

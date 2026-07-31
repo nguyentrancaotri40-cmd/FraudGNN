@@ -65,7 +65,7 @@ model:
   hidden_dim: 64                    # ✅ GIỐNG PAPER
   num_layers: 3                     # ✅ GIỐNG PAPER
   dropout: 0.20
-  num_node_types: 1
+  num_node_types: 5
 
 train:
   epochs: 100                       # ✅ GIỐNG PAPER

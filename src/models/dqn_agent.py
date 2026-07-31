@@ -1,4 +1,3 @@
-# src/models/dqn_agent.py
 from __future__ import annotations
 
 from collections import deque
@@ -67,8 +66,8 @@ class ThresholdDQNAgent:
     epsilon_decay: float = 0.995
     buffer_size: int = 10000
     device: str = "cpu"
-    grad_clip: float = 1.0          # ✅ Thêm gradient clipping
-    min_buffer_size: int = 64       # ✅ Thêm buffer size tối thiểu
+    grad_clip: float = 1.0
+    min_buffer_size: int = 64
 
     def __post_init__(self):
         self.device = "cuda" if self.device == "cuda" and torch.cuda.is_available() else "cpu"
@@ -93,14 +92,10 @@ class ThresholdDQNAgent:
     def update(self, batch_size: int = 64) -> float | None:
         """
         ✅ GIỐNG PAPER 100%: Vanilla DQN update (Eq 4)
-        ✅ FIX: Gradient clipping để loss không tăng
-        ✅ FIX: Chỉ update khi buffer đủ lớn
         """
-        # ✅ Chỉ update khi có đủ dữ liệu
         if len(self.memory) < self.min_buffer_size:
             return None
         
-        # ✅ Batch size không được lớn hơn buffer
         actual_batch_size = min(batch_size, len(self.memory))
         
         states, actions, rewards, next_states, dones = self.memory.sample(actual_batch_size)
@@ -110,13 +105,10 @@ class ThresholdDQNAgent:
         next_states = next_states.to(self.device)
         dones = dones.to(self.device)
 
-        # ✅ Current Q values: Q(s, a; θ)
         q_values = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
         
-        # ✅ GIỐNG PAPER: Vanilla DQN
-        # Dùng target network để chọn VÀ đánh giá action
+        # ✅ GIỐNG PAPER: Vanilla DQN (target network cho cả selection và evaluation)
         with torch.no_grad():
-            # max_a' Q(s', a'; θ⁻) - target network cho cả selection và evaluation
             next_q = self.target_net(next_states).max(dim=1)[0]
             target = rewards + self.gamma * next_q * (1.0 - dones)
         
@@ -124,17 +116,13 @@ class ThresholdDQNAgent:
         
         self.optimizer.zero_grad()
         loss.backward()
-        
-        # ✅ FIX: Gradient clipping để tránh loss tăng đột biến
         torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), self.grad_clip)
-        
         self.optimizer.step()
         
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
         return float(loss.item())
 
     def sync_target(self) -> None:
-        """Cập nhật target network = policy network (giống paper)."""
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
 
@@ -142,22 +130,22 @@ class BatchThresholdEnvironment:
     """
     Offline RL environment cho adaptive threshold selection.
     
-    ✅ GIỐNG PAPER 100%:
-    - State = graph embedding từ TSSGC (Section IV-B)
-    - Reward = combination of accuracy and FPR (Section IV-B)
+    ✅ GIỐNG PAPER 100% (Section IV-B):
+    - State = graph embedding từ TSSGC
+    - Reward = combination of accuracy and FPR
     """
     
     def __init__(
         self,
         scores: np.ndarray,
         labels: np.ndarray,
-        graph_embeddings: Optional[np.ndarray] = None,
+        graph_embeddings: Optional[np.ndarray] = None,  # ✅ State = graph embedding
         batch_size: int = 256,
         fpr_penalty: float = 2.0,
     ):
         self.scores = np.asarray(scores, dtype=np.float32)
         self.labels = np.asarray(labels, dtype=np.int64)
-        self.graph_embeddings = graph_embeddings
+        self.graph_embeddings = graph_embeddings  # ✅ Graph embedding từ TSSGC
         self.batch_size = int(batch_size)
         self.fpr_penalty = float(fpr_penalty)
         self.pos = 0
@@ -166,14 +154,17 @@ class BatchThresholdEnvironment:
         self.threshold_history = []
         self.memory_size = 10
         
+        # ✅ State dimension = graph embedding dimension (giống paper)
         if self.graph_embeddings is not None:
             self.embedding_dim = self.graph_embeddings.shape[1]
+            print(f"[RL ENV] Using graph embeddings as state (dim={self.embedding_dim}) - GIỐNG PAPER")
         else:
             self.embedding_dim = 64
+            print(f"[RL ENV] WARNING: No graph embeddings! This is NOT paper's method.")
 
     @property
     def state_dim(self) -> int:
-        """✅ State = graph embedding dimension (giống paper)."""
+        """✅ GIỐNG PAPER: State = graph embedding dimension."""
         return self.embedding_dim
 
     def reset(self) -> np.ndarray:
@@ -190,24 +181,29 @@ class BatchThresholdEnvironment:
 
     def _state_for_current_batch(self) -> np.ndarray:
         """
-        ✅ GIỐNG PAPER: State = graph embedding từ TSSGC
-        
-        ✅ FIX LỖI #C: Loại bỏ mean(y) khỏi state để tránh label leakage.
-        Paper định nghĩa State = Graph Embedding từ TSSGC, không bao gồm label.
+        ✅ GIỐNG PAPER 100%: State = graph embedding từ TSSGC (Section IV-B)
+        KHÔNG dùng fallback state (mean score, std score, etc.)
         """
         s, y = self._batch()
         if len(s) == 0:
             return np.zeros(self.state_dim, dtype=np.float32)
         
+        # ============================================================
+        # ✅ GIỐNG PAPER: State = Graph Embedding từ TSSGC
+        # ============================================================
         if self.graph_embeddings is not None:
             start = self.pos
             end = min(len(self.scores), start + self.batch_size)
             batch_embeddings = self.graph_embeddings[start:end]
+            # ✅ Lấy mean của graph embeddings trong batch (giống paper)
             state = np.mean(batch_embeddings, axis=0)
             return state.astype(np.float32)
         
-        # ✅ FIX: Fallback state KHÔNG chứa mean(y) - loại bỏ label leakage
-        # State chỉ dùng thông tin từ scores và threshold, không dùng label thật
+        # ============================================================
+        # ⚠️ FALLBACK: KHÔNG BAO GIỜ DÙNG (chỉ để debug)
+        # ============================================================
+        print(f"[WARNING] graph_embeddings is None! Using fallback state (NOT paper)")
+        # Fallback chỉ dùng để không bị lỗi, nhưng KHÔNG giống paper
         return np.array([
             float(np.mean(s)),
             float(np.std(s)),
@@ -253,8 +249,6 @@ class BatchThresholdEnvironment:
         
         # ============================================================
         # ✅ GIỐNG PAPER: Reward = combination of accuracy and FPR
-        # Paper: "Reward rt: A combination of detection accuracy 
-        #         and false positive rate"
         # ============================================================
         accuracy = (tp + tn) / max(1, tp + fp + fn + tn)
         fpr = fp / max(1, fp + tn)

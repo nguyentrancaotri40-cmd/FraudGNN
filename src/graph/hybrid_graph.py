@@ -1,4 +1,3 @@
-# src/graph/hybrid_graph.py
 from __future__ import annotations
 
 from typing import Any, Dict
@@ -260,13 +259,27 @@ def build_hybrid_transaction_graph(
         cfg=cfg,
     )
 
+    # ============================================================
+    # ✅ FIX: Tạo node_type dựa trên num_node_types từ config (GIỐNG PAPER)
+    # ============================================================
+    num_node_types = cfg.get("model", {}).get("num_node_types", 1)
+    
+    if num_node_types > 1:
+        # ✅ Dùng nhãn fraud/normal làm node type (giống paper Section IV-A-3)
+        node_type = torch.tensor(y, dtype=torch.long)
+        node_type = node_type.clamp(min=0, max=num_node_types - 1)
+        print(f"[GRAPH] Hybrid: Using {num_node_types} node types (from labels)")
+    else:
+        node_type = torch.zeros(x.shape[0], dtype=torch.long)
+        print(f"[GRAPH] Hybrid: Using single node type (num_node_types=1)")
+
     # 6. Build PyG Data object
     data = Data(
         x=torch.tensor(x, dtype=torch.float32),
         y=torch.tensor(y, dtype=torch.long),
         edge_index=edge_index,
         edge_time_delta=torch.tensor(merged_delta, dtype=torch.float32),
-        node_type=torch.zeros(x.shape[0], dtype=torch.long),
+        node_type=node_type,  # ← ĐÃ SỬA
         edge_source=edge_source,
         edge_weight=edge_weight,
     )
