@@ -1,24 +1,5 @@
 # ============================================================
-# CONFIG: IEEE-CIS - SAMPLE (GIỐNG PAPER 100% - EPOCHS 100)
-# ============================================================
-# ✅ GIỐNG PAPER 100%:
-#   - Temporal split (70-15-15)
-#   - batch_size: 64 / 256
-#   - epochs: 100 ✅ GIỮ NGUYÊN
-#   - max_neighbors_per_node: 3
-#   - hidden_dim: 64, num_layers: 3
-#   - similarity_threshold: 0.99
-#   - federated: true
-#   - Stratified random sampling (giữ tỷ lệ fraud)
-#   - Graph alignment (Section IV.C)
-#
-# ⚠️ CHỈ KHÁC PAPER (để test nhanh):
-#   - sample_frac: 0.2 (20% data - paper ko quy định)
-#   - federated.rounds: 3 (giảm để test - paper ko quy định)
-#   - federated.local_epochs: 1 (giảm để test - paper ko quy định)
-#   - patience: 5 (giảm để test - paper ko quy định)
-#   - rl.learning_rate: 0.0001 (giảm để ổn định)
-#   - rl.fpr_penalty: 2.0 (tăng để giảm FPR)
+# CONFIG: IEEE-CIS - GIỐNG PAPER 100% (CHỈ NHỮNG GÌ PAPER CÓ)
 # ============================================================
 
 flags:
@@ -32,7 +13,7 @@ flags:
   dqn: true
 
 experiment:
-  name: ieee_cis_sample_10pct
+  name: ieee_cis_paper_100
   pipeline: fraudgnn_rl
   dataset: ieee
 
@@ -42,7 +23,7 @@ dataset:
   label_col: isFraud
   time_col: TransactionDT
   time_unit: second
-  sample_frac: 0.2
+  sample_frac: 0.5
   stratified_sampling: true
   random_state: 42
 
@@ -144,35 +125,26 @@ model:
   num_node_types: 3
 
 train:
-  epochs: 100                      # ✅ GIỮ NGUYÊN (giống paper)
-  patience: 5
+  epochs: 100
+  patience: 15
   batch_size: 64
   learning_rate: 0.001
   weight_decay: 0.0001
 
+# ============================================================
+# DQN - PAPER CHỈ CÔNG BỐ NHỮNG THAM SỐ NÀY
+# ============================================================
 rl:
   enabled: true
-  threshold_bins:
-    - 0.20
-    - 0.25
-    - 0.30
-    - 0.35
-    - 0.40
-    - 0.45
-    - 0.50
-    - 0.55
-    - 0.60
-    - 0.65
-    - 0.70
-  fpr_penalty: 2.0
-  epochs: 100                      # ✅ GIỮ NGUYÊN (giống paper)
+  threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60]
+  fpr_penalty: 0.3
+  epochs: 100
   batch_size: 256
-  learning_rate: 0.0001
 
 federated:
   num_clients: 3
-  rounds: 3
-  local_epochs: 1
+  rounds: 20
+  local_epochs: 5
   learning_rate: 0.001
   batch_size: 64
   aggregation: fedavg

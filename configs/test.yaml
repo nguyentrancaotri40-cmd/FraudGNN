@@ -87,7 +87,7 @@ rl:
 
 federated:
   num_clients: 3
-  rounds: 1                    # ⚠️ Test nhanh (paper: 20)
+  rounds: 5                    # ⚠️ Test nhanh (paper: 20)
   local_epochs: 1              # ⚠️ Test nhanh (paper: 5)
   learning_rate: 0.001
   batch_size: 64               # ✅ GIỐNG PAPER
