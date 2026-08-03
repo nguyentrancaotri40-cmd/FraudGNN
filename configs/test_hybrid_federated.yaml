@@ -72,5 +72,5 @@ federated:
   batch_size: 32
   aggregation: fedavg
   align_graphs: true
-  alignment_method: feature_projection
+  alignment_method: shared_encoder
   

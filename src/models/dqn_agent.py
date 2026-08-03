@@ -54,20 +54,24 @@ class ThresholdDQNAgent:
     
     Paper (Eq 3-4): Vanilla DQN với target network.
     KHÔNG dùng Double DQN.
+    
+    ✅ FIX: Thêm target_update_freq để sync target theo steps
+    ✅ FIX: Giảm lr, tăng buffer_size, giảm epsilon_decay
     """
     state_dim: int
     thresholds: List[float]
     n_features: int = 10
     hidden_dim: int = 128
     gamma: float = 0.99
-    lr: float = 1e-3
+    lr: float = 1e-5              # ✅ FIX: giảm từ 1e-3
     epsilon_start: float = 1.0
-    epsilon_end: float = 0.05
-    epsilon_decay: float = 0.995
-    buffer_size: int = 10000
+    epsilon_end: float = 0.01     # ✅ FIX: giảm từ 0.05
+    epsilon_decay: float = 0.9995 # ✅ FIX: giảm từ 0.995
+    buffer_size: int = 100000     # ✅ FIX: tăng từ 10000
     device: str = "cpu"
-    grad_clip: float = 1.0
-    min_buffer_size: int = 64
+    grad_clip: float = 0.5        # ✅ FIX: giảm từ 1.0
+    min_buffer_size: int = 256    # ✅ FIX: tăng từ 64
+    target_update_freq: int = 50  # ✅ THÊM: sync target mỗi N steps
 
     def __post_init__(self):
         self.device = "cuda" if self.device == "cuda" and torch.cuda.is_available() else "cpu"
@@ -78,6 +82,7 @@ class ThresholdDQNAgent:
         self.memory = ReplayBuffer(self.buffer_size)
         self.epsilon = self.epsilon_start
         self.feature_weights = torch.ones(self.n_features, device=self.device) / self.n_features
+        self._sync_counter = 0  # ✅ THÊM: đếm bước để sync target
 
     def act(self, state: np.ndarray, explore: bool = True) -> int:
         if explore and random.random() < self.epsilon:
@@ -92,6 +97,7 @@ class ThresholdDQNAgent:
     def update(self, batch_size: int = 64) -> float | None:
         """
         ✅ GIỐNG PAPER 100%: Vanilla DQN update (Eq 4)
+        ✅ FIX: Gradient clipping, min_buffer_size, sync counter
         """
         if len(self.memory) < self.min_buffer_size:
             return None
@@ -120,10 +126,18 @@ class ThresholdDQNAgent:
         self.optimizer.step()
         
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
+        self._sync_counter += 1  # ✅ THÊM: tăng counter
+        
         return float(loss.item())
+    
+    def should_sync_target(self) -> bool:
+        """✅ THÊM: kiểm tra xem có cần sync target không"""
+        return self._sync_counter >= self.target_update_freq
 
     def sync_target(self) -> None:
+        """✅ FIX: reset counter sau khi sync"""
         self.target_net.load_state_dict(self.policy_net.state_dict())
+        self._sync_counter = 0
 
 
 class BatchThresholdEnvironment:

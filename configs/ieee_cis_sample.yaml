@@ -149,7 +149,7 @@ federated:
   batch_size: 64
   aggregation: fedavg
   align_graphs: true
-  alignment_method: feature_projection
+  alignment_method: shared_encoder
 
 threshold_selection:
   metric: custom

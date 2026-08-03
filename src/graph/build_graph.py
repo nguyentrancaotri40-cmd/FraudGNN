@@ -14,7 +14,7 @@ def build_transaction_graph(
     y: np.ndarray,
     time_values: np.ndarray | None,
     cfg: Dict[str, Any],
-    entity_type: np.ndarray | None = None,  # ✅ THÊM: entity type từ dữ liệu (giống paper)
+    entity_type: np.ndarray | None = None,
 ) -> Data:
     """
     Create a PyG transaction graph for FraudGNN-RL reproduction.
@@ -43,38 +43,40 @@ def build_transaction_graph(
         edge_time_delta = np.concatenate([edge_time_delta, np.zeros(x.shape[0], dtype=np.float32)])
     
     # ============================================================
-    # ✅ FIX 100%: Sử dụng ENTITY TYPE (GIỐNG PAPER Eq 10)
-    # Paper: "e_type(i) is a learnable embedding vector for the type of entity i"
+    # ✅ FIX: num_node_types phải từ config, không phụ thuộc dữ liệu
     # ============================================================
     num_node_types = cfg.get("model", {}).get("num_node_types", 1)
     
     if entity_type is not None:
         # ✅ ĐÚNG: Dùng entity type từ dữ liệu (giống paper)
         node_type = torch.tensor(entity_type, dtype=torch.long)
-        # Đảm bảo node_type nằm trong khoảng [0, num_node_types-1]
         node_type = node_type.clamp(min=0, max=num_node_types - 1)
         unique_types = torch.unique(node_type)
-        print(f"[GRAPH] Using ENTITY TYPES from data (num_types={len(unique_types)}, min={unique_types.min().item()}, max={unique_types.max().item()})")
+        print(f"[GRAPH] Using ENTITY TYPES from data (num_types={len(unique_types)})")
     else:
-        # ⚠️ Fallback: Nếu không có entity type, dùng label (KHÔNG GIỐNG PAPER)
-        # Nhưng vẫn đảm bảo không bị lỗi
+        # ✅ Nếu không có entity type, dùng 1 loại duy nhất
+        # KHÔNG BAO GIỜ dùng label (y) làm node_type
+        node_type = torch.zeros(x.shape[0], dtype=torch.long)
         if num_node_types > 1:
-            print(f"[WARNING] No entity_type provided! Using labels as node type (NOT paper)")
-            node_type = torch.tensor(y, dtype=torch.long)
-            node_type = node_type.clamp(min=0, max=num_node_types - 1)
+            print(f"[WARNING] No entity_type provided! Using single type (NOT using labels)")
         else:
-            node_type = torch.zeros(x.shape[0], dtype=torch.long)
             print(f"[GRAPH] Using single node type (num_node_types=1)")
     
+    # ============================================================
+    # ✅ FIX: x luôn là numpy array từ preprocessor, không thay đổi
+    # ============================================================
     data = Data(
-        x=torch.tensor(x, dtype=torch.float32),
+        x=torch.tensor(x, dtype=torch.float32),  # ← Không thay đổi x
         y=torch.tensor(y, dtype=torch.long),
         edge_index=edge_index,
         edge_time_delta=torch.tensor(edge_time_delta, dtype=torch.float32),
-        node_type=node_type,  # ← ĐÃ SỬA: entity type (giống paper)
+        node_type=node_type,
     )
     if times_hours is not None:
         data.node_time = torch.tensor(times_hours, dtype=torch.float32)
+    
+    print(f"[GRAPH] build_transaction_graph: x.shape={x.shape}")
+    
     return data
 
 

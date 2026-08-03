@@ -6,6 +6,10 @@
 #   - Online Adaptation: thí nghiệm riêng minh họa Figure 2
 #   - Semantic Branch: sử dụng ENTITY TYPE (giống paper Eq 10)
 #   - RL State: Graph Embedding từ TSSGC (giống paper Section IV-B)
+#   - ✅ FIX: RL Agent thực sự được dùng để chọn threshold (giống paper Eq 12)
+#   - ✅ FIX: Target sync theo steps để DQN ổn định
+#   - ✅ FIX: KHÔNG dùng label (y) làm node_type trong SOFT ONLY case
+#   - ✅ FIX: Feature weights áp dụng vào model (giống paper Section IV-B)
 # ============================================================
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ from src.graph.soft_behavior_graph import build_soft_behavior_edges
 from src.graph.graph_utils import normalize_time_to_hours, make_edge_tensors
 from src.models.fraudgnn_rl import FraudGNNRL
 from src.train.federated import train_federated
-from src.train.train_rl import choose_best_threshold_by_validation
+from src.train.train_rl import choose_best_threshold_by_validation, apply_dqn_policy, apply_naf_policy
 from src.eval.evaluate import predict_scores, save_metrics
 from src.eval.metrics import classification_metrics
 from src.utils.seed import set_seed
@@ -164,23 +168,31 @@ def build_graph_from_flags(x, y, t, cfg, flags, entity_type=None):
         edge_index = make_edge_tensors(soft_edges, num_nodes=x.shape[0], self_loops=True)
         edge_time_delta = np.concatenate([soft_delta, np.zeros(x.shape[0], dtype=np.float32)])
         
-        # ✅ FIX: Tạo node_type từ ENTITY TYPE (giống paper)
+        # ============================================================
+        # ✅ FIX: KHÔNG BAO GIỜ DÙNG y (label) LÀM NODE_TYPE
+        # ============================================================
         num_node_types = cfg.get("model", {}).get("num_node_types", 1)
+        
         if entity_type is not None:
+            # ✅ ĐÚNG: Dùng entity type từ dữ liệu
             node_type = torch.tensor(entity_type, dtype=torch.long)
             node_type = node_type.clamp(min=0, max=num_node_types - 1)
-        elif num_node_types > 1:
-            node_type = torch.tensor(y, dtype=torch.long)
-            node_type = node_type.clamp(min=0, max=num_node_types - 1)
+            print(f"[GRAPH SOFT] Using ENTITY TYPES from data")
         else:
+            # ✅ Nếu không có entity type, dùng 1 loại duy nhất
+            # KHÔNG BAO GIỜ dùng label (y) làm node_type
             node_type = torch.zeros(x.shape[0], dtype=torch.long)
+            if num_node_types > 1:
+                print(f"[WARNING SOFT] No entity_type provided! Using single type (NOT using labels)")
+            else:
+                print(f"[GRAPH SOFT] Using single node type (num_node_types=1)")
         
         data = Data(
             x=torch.tensor(x, dtype=torch.float32),
             y=torch.tensor(y, dtype=torch.long),
             edge_index=edge_index,
             edge_time_delta=torch.tensor(edge_time_delta, dtype=torch.float32),
-            node_type=node_type,
+            node_type=node_type,  # ← ĐÃ SỬA: KHÔNG label leakage
             edge_weight=torch.ones(edge_index.size(1), dtype=torch.float32),
         )
         
@@ -567,13 +579,52 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
             timing["rl_training_sec"] = time.perf_counter() - start
             print(f"[TIMING] NAF trained in {timing['rl_training_sec']:.2f}s")
             
-            best_threshold, val_threshold_metrics = choose_best_threshold_by_validation(
+            # ============================================================
+            # ✅ FIX: Áp dụng feature weights vào model (GIỐNG PAPER Section IV-B)
+            # ============================================================
+            # Lấy feature weights từ NAF agent
+            first_state = val_embeddings[0] if len(val_embeddings) > 0 else np.zeros(embed_dim)
+            feature_weights = agent.get_feature_weights(first_state)
+            
+            # ✅ Gọi set_feature_weights() để áp dụng vào model
+            global_model.set_feature_weights(torch.tensor(feature_weights, dtype=torch.float32))
+            print(f"[NAF] Applied feature weights to model (sum={feature_weights.sum():.4f})")
+            
+            # ✅ Recompute embeddings với feature weights mới
+            val_embeddings = global_model.embeddings(val_graph).cpu().numpy()
+            test_embeddings = global_model.embeddings(test_graph).cpu().numpy()
+            print(f"[NAF] Recomputed embeddings with feature weights")
+            
+            # ============================================================
+            # ✅ Dùng NAF policy để chọn threshold (GIỐNG PAPER)
+            # ============================================================
+            # 1. Threshold từ RL policy
+            policy_threshold, policy_metrics = apply_naf_policy(
+                agent, val_scores, val_labels, cfg, graph_embeddings=val_embeddings
+            )
+            print(f"[NAF] Threshold from RL policy: {policy_threshold:.4f}")
+            
+            # 2. Grid-search để so sánh (log riêng)
+            grid_threshold, grid_metrics = choose_best_threshold_by_validation(
                 val_scores, val_labels, thresholds, cfg=cfg
             )
-            val_threshold_metrics["threshold_selection_method"] = "naf_validation"
+            print(f"[NAF] Grid-search threshold: {grid_threshold:.4f} (for comparison only)")
+            print(f"[NAF] Difference: {abs(policy_threshold - grid_threshold):.4f}")
             
-            print(f"[NAF] Best threshold from validation: {best_threshold:.4f}")
-            print(f"[NAF] Val F1: {val_threshold_metrics.get('f1', 0):.4f}")
+            # ✅ Dùng policy threshold cho benchmark
+            best_threshold = policy_threshold
+            val_threshold_metrics = {
+                "threshold_selection_method": "naf_policy",
+                "policy_threshold": policy_threshold,
+                "grid_threshold": grid_threshold,
+                "grid_f1": grid_metrics.get("f1", 0),
+                "grid_auc_roc": grid_metrics.get("auc_roc", 0),
+                "feature_weights_applied": True,
+                "feature_weights_sum": float(feature_weights.sum()),
+            }
+            
+            print(f"[NAF] Val F1 (policy): {classification_metrics(val_labels, val_scores, threshold=policy_threshold).get('f1', 0):.4f}")
+            print(f"[NAF] Val F1 (grid): {grid_metrics.get('f1', 0):.4f}")
             
         else:
             print(f"[DQN] Using DQN (discrete action)")
@@ -590,49 +641,95 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 fpr_penalty=cfg.get("rl", {}).get("fpr_penalty", 2.0),
             )
             
+            # ✅ FIX: Đọc target_update_freq từ config
+            target_update_freq = cfg.get("rl", {}).get("target_update_freq", 50)
+            
             # ✅ FIX: state_dim = embedding dimension (64) - GIỐNG PAPER
             agent = ThresholdDQNAgent(
                 state_dim=env.state_dim,
                 thresholds=thresholds,
                 n_features=embed_dim,
                 device=device,
-                lr=0.0001,
-                grad_clip=0.5,
-                min_buffer_size=64,
+                lr=cfg.get("rl", {}).get("learning_rate", 0.00001),
+                buffer_size=cfg.get("rl", {}).get("buffer_size", 100000),
+                epsilon_decay=cfg.get("rl", {}).get("epsilon_decay", 0.9995),
+                grad_clip=cfg.get("rl", {}).get("grad_clip", 0.5),
+                min_buffer_size=cfg.get("rl", {}).get("min_buffer_size", 256),
+                target_update_freq=target_update_freq,  # ✅ THÊM
             )
             
             rl_epochs = cfg.get("rl", {}).get("epochs", 100)
+            global_step = 0
+            
             for ep in range(rl_epochs):
                 state = env.reset()
                 done = False
                 ep_loss = []
+                step_in_epoch = 0
+                
                 while not done:
                     action = agent.act(state, explore=True)
                     threshold = agent.threshold(action)
                     next_state, reward, done, info = env.step(threshold)
                     agent.memory.push(state, action, reward, next_state, done)
                     loss = agent.update(batch_size=min(64, len(agent.memory)))
+                    
                     if loss is not None:
                         ep_loss.append(loss)
+                    
+                    # ✅ FIX: Sync target theo số bước (giống paper)
+                    global_step += 1
+                    step_in_epoch += 1
+                    if agent.should_sync_target():
+                        agent.sync_target()
+                        if step_in_epoch % 100 == 0:
+                            print(f"  [DQN] Synced target at step {global_step} (epoch {ep+1})")
+                    
                     state = next_state
+                
+                # ✅ Sync cuối epoch
                 agent.sync_target()
                 
                 if (ep + 1) % 10 == 0:
                     avg_loss = np.mean(ep_loss) if ep_loss else 0
-                    print(f"  [DQN] Epoch {ep+1}/{rl_epochs}, avg_loss={avg_loss:.4f}")
+                    print(f"  [DQN] Epoch {ep+1}/{rl_epochs}, avg_loss={avg_loss:.4f}, steps={global_step}")
             
             timing["rl_training_sec"] = time.perf_counter() - start
             print(f"[TIMING] DQN trained in {timing['rl_training_sec']:.2f}s")
             
-            best_threshold, val_threshold_metrics = choose_best_threshold_by_validation(
+            # ============================================================
+            # ✅ FIX 1: Dùng DQN policy để chọn threshold (GIỐNG PAPER)
+            # ============================================================
+            # 1. Threshold từ RL policy
+            policy_threshold, policy_metrics = apply_dqn_policy(
+                agent, val_scores, val_labels, cfg, graph_embeddings=val_embeddings
+            )
+            print(f"[DQN] Threshold from RL policy: {policy_threshold:.4f}")
+            
+            # 2. Grid-search để so sánh (log riêng)
+            grid_threshold, grid_metrics = choose_best_threshold_by_validation(
                 val_scores, val_labels, thresholds, cfg=cfg
             )
-            val_threshold_metrics["threshold_selection_method"] = "dqn_validation"
+            print(f"[DQN] Grid-search threshold: {grid_threshold:.4f} (for comparison only)")
+            print(f"[DQN] Difference: {abs(policy_threshold - grid_threshold):.4f}")
             
-            print(f"[DQN] Best threshold from validation: {best_threshold:.4f}")
-            print(f"[DQN] Val F1: {val_threshold_metrics.get('f1', 0):.4f}")
+            # ✅ Dùng policy threshold cho benchmark
+            best_threshold = policy_threshold
+            val_threshold_metrics = {
+                "threshold_selection_method": "dqn_policy",
+                "policy_threshold": policy_threshold,
+                "grid_threshold": grid_threshold,
+                "grid_f1": grid_metrics.get("f1", 0),
+                "grid_auc_roc": grid_metrics.get("auc_roc", 0),
+                "total_steps": global_step,
+                "final_loss": np.mean(ep_loss) if ep_loss else 0,
+            }
+            
+            print(f"[DQN] Val F1 (policy): {classification_metrics(val_labels, val_scores, threshold=policy_threshold).get('f1', 0):.4f}")
+            print(f"[DQN] Val F1 (grid): {grid_metrics.get('f1', 0):.4f}")
     
     else:
+        # ❌ Không dùng RL: grid-search
         best_threshold, val_threshold_metrics = choose_best_threshold_by_validation(
             val_scores, val_labels, thresholds, cfg=cfg
         )
@@ -640,13 +737,23 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
         print(f"[NO RL] Best threshold from validation: {best_threshold:.4f}")
     
     # ============================================================
-    # 4. ✅ BENCHMARK - ĐÁNH GIÁ TRÊN TEST (CHỈ DÙNG THRESHOLD CỐ ĐỊNH)
+    # 4. ✅ BENCHMARK - ĐÁNH GIÁ TRÊN TEST
     # ============================================================
-    print(f"\n[TIMING] Evaluating on test set with fixed threshold...")
+    print(f"\n[TIMING] Evaluating on test set...")
     start = time.perf_counter()
     
     val_metrics = classification_metrics(val_labels, val_scores, threshold=best_threshold)
     test_metrics = classification_metrics(test_labels, test_scores, threshold=best_threshold)
+    
+    # ✅ Log so sánh với grid-search threshold
+    if use_rl and agent is not None:
+        grid_threshold = val_threshold_metrics.get("grid_threshold", 0.5)
+        grid_test_metrics = classification_metrics(test_labels, test_scores, threshold=grid_threshold)
+        print(f"\n[COMPARISON] RL policy vs Grid-search on TEST set:")
+        print(f"  RL threshold: {best_threshold:.4f} | Grid threshold: {grid_threshold:.4f}")
+        print(f"  RL F1: {test_metrics.get('f1', 0):.4f} | Grid F1: {grid_test_metrics.get('f1', 0):.4f}")
+        print(f"  RL Recall: {test_metrics.get('recall', 0):.4f} | Grid Recall: {grid_test_metrics.get('recall', 0):.4f}")
+        print(f"  RL AUC-ROC: {test_metrics.get('auc_roc', 0):.4f} | Grid AUC-ROC: {grid_test_metrics.get('auc_roc', 0):.4f}")
     
     timing["inference_sec"] = time.perf_counter() - start
     print(f"[TIMING] Evaluation done in {timing['inference_sec']:.2f}s")
@@ -718,7 +825,7 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
             print(f"{display_name:<15} {paper_val:<20.4f} {repro_val:<20.4f} {arrow}{abs(delta):<14.4f}")
         
         print(f"{'='*80}")
-        print(f"Selected threshold: {best_threshold:.4f} (from validation set)")
+        print(f"Selected threshold: {best_threshold:.4f} (from RL policy)")
         
         f1_delta = repro.get('f1', 0) - paper.get('f1', 0)
         if abs(f1_delta) < 0.01:
@@ -792,6 +899,7 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "pipeline": pipeline,
         "flags": flags,
         "selected_threshold": best_threshold,
+        "threshold_selection_method": val_threshold_metrics.get("threshold_selection_method", "unknown"),
         "val_metrics": val_metrics,
         "test_metrics": test_metrics,
         "runtime": timing,
@@ -799,17 +907,20 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "latency": latency_metrics,
         "memory": memory_metrics,
         "federated_history": fed_history,
-        "threshold_selection": "validation_set",
-        "notes": "Benchmark: RL only on validation, test uses fixed threshold (giống paper Table 2)",
+        "notes": "Benchmark: RL only on validation, test uses fixed threshold from RL policy (giống paper Table 2)",
         "online_adaptation": online_result,
         "entity_type_used": entity_type_full is not None,
+        "threshold_comparison": {
+            "policy_threshold": val_threshold_metrics.get("policy_threshold", best_threshold),
+            "grid_threshold": val_threshold_metrics.get("grid_threshold", None),
+        } if use_rl and agent is not None else None,
     }
     
     if use_rl:
         result["rl_info"] = {
             "type": rl_type,
             "epochs": rl_epochs if use_rl else 0,
-            "threshold_from": "validation",
+            "threshold_from": "rl_policy",
         }
     
     exp_name = cfg.get("experiment", {}).get("name", "experiment")

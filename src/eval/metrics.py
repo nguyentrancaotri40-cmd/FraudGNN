@@ -23,14 +23,20 @@ def recall_at_k_percent(y_true: np.ndarray, y_score: np.ndarray, k_percent: floa
     return float(np.sum(y_true[top_idx] == 1) / positives)
 
 
+# ============================================================
+# src/eval/metrics.py - FIX _safe_auc()
+# ============================================================
+
 def _safe_auc(y_true: np.ndarray, y_score: np.ndarray) -> tuple[float, float]:
     """
     Safe AUC calculation - KHÔNG BAO GIỜ trả về NaN.
+    
+    ✅ FIX: KHÔNG hard-code AUC=1.0 khi chỉ có 1 class
     """
     y_true = np.asarray(y_true).astype(int)
     y_score = np.asarray(y_score).astype(float)
     
-    # ✅ 1. Remove NaN/Inf
+    # 1. Remove NaN/Inf
     valid_mask = ~(np.isnan(y_score) | np.isinf(y_score))
     if not np.all(valid_mask):
         n_invalid = np.sum(~valid_mask)
@@ -38,31 +44,30 @@ def _safe_auc(y_true: np.ndarray, y_score: np.ndarray) -> tuple[float, float]:
         y_true = y_true[valid_mask]
         y_score = y_score[valid_mask]
     
-    # ✅ 2. Nếu không có dữ liệu → random
+    # 2. Nếu không có dữ liệu
     if len(y_true) == 0:
         return 0.5, 0.0
     
-    # ✅ 3. Nếu chỉ có 1 class
+    # 3. ✅ FIX: Nếu chỉ có 1 class → KHÔNG hard-code AUC=1.0
     unique_labels = np.unique(y_true)
     if len(unique_labels) == 1:
-        if unique_labels[0] == 1:
-            # Tất cả fraud → AUC = 1.0 (perfect)
-            return 1.0, 1.0
-        else:
-            # Tất cả normal → AUC = 0.5 (random)
-            return 0.5, 0.0
+        # ✅ Cảnh báo rõ ràng
+        warnings.warn(
+            f"⚠️ Only one class in y_true! unique_labels={unique_labels}. "
+            f"AUC is not defined for single class. Returning (0.5, 0.0).",
+            UserWarning
+        )
+        # ✅ KHÔNG hard-code 1.0
+        return 0.5, 0.0
     
-    # ✅ 4. Có cả 2 classes → tính bình thường
+    # 4. Có cả 2 classes → tính bình thường
     try:
-        # Kiểm tra scores có đa dạng không
         if np.all(y_score == y_score[0]):
-            # Tất cả scores giống nhau → random
             return 0.5, float(np.mean(y_true))
         
         auc_roc = float(roc_auc_score(y_true, y_score))
         auc_pr = float(average_precision_score(y_true, y_score))
         
-        # ✅ 5. Đảm bảo không bị NaN
         if np.isnan(auc_roc):
             auc_roc = 0.5
         if np.isnan(auc_pr):

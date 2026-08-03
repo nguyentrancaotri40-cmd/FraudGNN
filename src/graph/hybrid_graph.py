@@ -177,6 +177,7 @@ def build_hybrid_transaction_graph(
     y: np.ndarray,
     time_values: np.ndarray | None,
     cfg: Dict[str, Any],
+    entity_type: np.ndarray | None = None,
 ) -> Data:
     """Build Hybrid Graph for the proposed model."""
     graph_cfg = cfg.get("graph", {})
@@ -194,9 +195,12 @@ def build_hybrid_transaction_graph(
     print(f"[GRAPH] Building hybrid graph with {n_nodes} nodes...")
     print(f"[GRAPH] threshold={threshold}, time_window_hours={time_window}, max_neighbors={max_neighbors}")
     
+    # ============================================================
     # 1. Build original/baseline graph
+    # ✅ FIX: Không thay đổi x, chỉ dùng để tạo graph
+    # ============================================================
     base_start = time.perf_counter()
-    base_graph = build_transaction_graph(x, y, time_values, cfg)
+    base_graph = build_transaction_graph(x, y, time_values, cfg, entity_type=entity_type)
     base_time = time.perf_counter() - base_start
 
     base_edges = _edge_index_to_list(base_graph.edge_index)
@@ -260,26 +264,31 @@ def build_hybrid_transaction_graph(
     )
 
     # ============================================================
-    # ✅ FIX: Tạo node_type dựa trên num_node_types từ config (GIỐNG PAPER)
+    # ✅ FIX: KHÔNG BAO GIỜ DÙNG y (label) LÀM NODE_TYPE
     # ============================================================
     num_node_types = cfg.get("model", {}).get("num_node_types", 1)
     
-    if num_node_types > 1:
-        # ✅ Dùng nhãn fraud/normal làm node type (giống paper Section IV-A-3)
-        node_type = torch.tensor(y, dtype=torch.long)
+    if entity_type is not None:
+        node_type = torch.tensor(entity_type, dtype=torch.long)
         node_type = node_type.clamp(min=0, max=num_node_types - 1)
-        print(f"[GRAPH] Hybrid: Using {num_node_types} node types (from labels)")
+        unique_types = torch.unique(node_type)
+        print(f"[GRAPH] Hybrid: Using ENTITY TYPES from data (num_types={len(unique_types)}) - GIỐNG PAPER")
     else:
         node_type = torch.zeros(x.shape[0], dtype=torch.long)
-        print(f"[GRAPH] Hybrid: Using single node type (num_node_types=1)")
+        if num_node_types > 1:
+            print(f"[WARNING] Hybrid: No entity_type provided! Using single type (NOT using labels)")
+        else:
+            print(f"[GRAPH] Hybrid: Using single node type (num_node_types=1)")
 
-    # 6. Build PyG Data object
+    # ============================================================
+    # ✅ FIX: x trong data là x gốc, không thêm feature
+    # ============================================================
     data = Data(
-        x=torch.tensor(x, dtype=torch.float32),
+        x=torch.tensor(x, dtype=torch.float32),  # ← Không đổi
         y=torch.tensor(y, dtype=torch.long),
         edge_index=edge_index,
         edge_time_delta=torch.tensor(merged_delta, dtype=torch.float32),
-        node_type=node_type,  # ← ĐÃ SỬA
+        node_type=node_type,
         edge_source=edge_source,
         edge_weight=edge_weight,
     )

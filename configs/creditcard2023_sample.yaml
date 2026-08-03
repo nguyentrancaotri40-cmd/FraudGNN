@@ -2,7 +2,7 @@
 # CONFIG: CreditCard 2023 - SAMPLE (GIỐNG PAPER 100%)
 # ============================================================
 # ✅ GIỐNG PAPER 100%:
-#   - Temporal split với stratified sampling (giữ tỷ lệ fraud)
+#   - Random split với stratified sampling (giữ tỷ lệ fraud)
 #   - batch_size: 64 / 256
 #   - epochs: 100
 #   - max_neighbors_per_node: 3
@@ -25,8 +25,8 @@ flags:
   soft_edges: false
   hybrid_graph: false
   weighted_fusion: false
-  federated: true          # ✅ GIỐNG PAPER
-  rl: true                 # ✅ GIỐNG PAPER
+  federated: true
+  rl: true
   pruning: false
   dqn: true
 
@@ -39,14 +39,16 @@ dataset:
   name: CreditCard2023
   path: data/raw/creditcard_2023_fast.csv
   label_col: Class
-  time_col: id
-  time_unit: index
-  sample_frac: 0.3         # ✅ Tăng lên 30% để học tốt hơn
-  stratified_sampling: false   # ??? cần check
+  # ✅ FIX: Bỏ time_col (không dùng temporal cho Credit Card)
+  # time_col: id
+  # time_unit: index
+  sample_frac: 0.3
+  stratified_sampling: true      # ✅ FIX: true để giữ tỷ lệ fraud
   random_state: 42
 
 split:
-  strategy: stratified_temporal   # ✅ FIX: temporal + stratified (giữ tỷ lệ fraud)
+  # ✅ FIX: Dùng stratified_random thay vì stratified_temporal
+  strategy: stratified_random    # ✅ GIỐNG PAPER (random split)
   train_ratio: 0.70
   val_ratio: 0.15
 
@@ -58,21 +60,21 @@ preprocess:
 
 graph:
   type: transaction_similarity
-  time_window_hours: 1000.0
-  similarity_threshold: 0.98       # ✅ GIỐNG PAPER
-  max_neighbors_per_node: 3        # ✅ GIỐNG PAPER
+  time_window_hours: null
+  similarity_threshold: 0.5
+  max_neighbors_per_node: 10
   add_self_loops: true
 
 model:
-  hidden_dim: 64                   # ✅ GIỐNG PAPER
-  num_layers: 3                    # ✅ GIỐNG PAPER
+  hidden_dim: 64
+  num_layers: 3
   dropout: 0.20
   num_node_types: 2
 
 train:
-  epochs: 100                      # ✅ GIỐNG PAPER
-  patience: 10                     # ✅ Tăng patience
-  batch_size: 64                   # ✅ GIỐNG PAPER
+  epochs: 100
+  patience: 10
+  batch_size: 64
   learning_rate: 0.001
   weight_decay: 0.0001
 
@@ -90,19 +92,19 @@ rl:
     - 0.45
     - 0.50
   fpr_penalty: 0.5
-  epochs: 100                      # ✅ GIỐNG PAPER
-  batch_size: 256                  # ✅ GIỐNG PAPER
-  learning_rate: 0.0001            # ✅ FIX: Giảm learning rate để DQN ổn định
+  epochs: 100
+  batch_size: 256
+  learning_rate: 0.0001
 
 federated:
   num_clients: 3
-  rounds: 5                        # ⚠️ Giảm để test (paper ko quy định)
-  local_epochs: 2                  # ⚠️ Giảm để test (paper ko quy định)
+  rounds: 5
+  local_epochs: 2
   learning_rate: 0.001
-  batch_size: 64                   # ✅ GIỐNG PAPER
-  aggregation: fedavg              # ✅ GIỐNG PAPER (Algorithm 1)
-  align_graphs: true               # ✅ GIỐNG PAPER (Section IV.C)
-  alignment_method: feature_projection
+  batch_size: 64
+  aggregation: fedavg
+  align_graphs: true
+  alignment_method: shared_encoder
 
 threshold_selection:
   metric: custom

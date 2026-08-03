@@ -1,4 +1,7 @@
-# src/train/train_rl.py
+# ============================================================
+# src/train/train_rl.py - FULL FIX
+# ============================================================
+
 from __future__ import annotations
 
 from typing import Any, Dict
@@ -67,6 +70,7 @@ def apply_dqn_policy(
     labels: np.ndarray,
     cfg: Dict[str, Any],
     device: str | None = None,
+    graph_embeddings: np.ndarray | None = None,
 ) -> tuple[np.ndarray, float]:
     """Apply trained DQN agent greedily to select thresholds per batch."""
     import numpy as np
@@ -78,6 +82,7 @@ def apply_dqn_policy(
     env = BatchThresholdEnvironment(
         scores=scores,
         labels=labels,
+        graph_embeddings=graph_embeddings,
         batch_size=batch_size,
         fpr_penalty=fpr_penalty,
     )
@@ -89,6 +94,50 @@ def apply_dqn_policy(
     while not done:
         action = agent.act(state, explore=False)
         threshold = agent.threshold(action)
+        thresholds.append(threshold)
+        state, _reward, done, _info = env.step(threshold)
+    
+    thresholds = np.array(thresholds)
+    mean_threshold = float(np.mean(thresholds))
+    
+    return thresholds, mean_threshold
+
+
+# ============================================================
+# ✅ THÊM: apply_naf_policy
+# ============================================================
+def apply_naf_policy(
+    agent,
+    scores: np.ndarray,
+    labels: np.ndarray,
+    cfg: Dict[str, Any],
+    graph_embeddings: np.ndarray | None = None,
+) -> tuple[np.ndarray, float]:
+    """Apply trained NAF agent greedily to select thresholds."""
+    import numpy as np
+    
+    rl_cfg = cfg.get("rl", {})
+    batch_size = int(rl_cfg.get("batch_size", 256))
+    fpr_penalty = float(rl_cfg.get("fpr_penalty", 2.0))
+    
+    # Tạo environment với graph embeddings
+    from src.models.naf_agent import BatchNAFEnvironment
+    
+    env = BatchNAFEnvironment(
+        scores=scores,
+        labels=labels,
+        graph_embeddings=graph_embeddings,
+        batch_size=batch_size,
+        fpr_penalty=fpr_penalty,
+    )
+    
+    state = env.reset()
+    done = False
+    thresholds = []
+    
+    while not done:
+        # ✅ Greedy: explore=False
+        threshold = agent.act(state, explore=False)
         thresholds.append(threshold)
         state, _reward, done, _info = env.step(threshold)
     

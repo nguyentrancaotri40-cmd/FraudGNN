@@ -22,37 +22,57 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+# ============================================================
+# ✅ FIX 1: shared_encoder dùng chung 1 projection layer
+# ============================================================
 def align_client_graphs(
     client_graphs: List[Any],
     alignment_method: str = "feature_projection",
     shared_dim: Optional[int] = None,
-) -> List[Any]:
+    projection: Optional[nn.Module] = None,  # ← THÊM: dùng chung projection
+) -> tuple[List[Any], Optional[nn.Module]]:
     """
     ✅ GIỐNG PAPER: Graph alignment technique (Section IV.C).
     
     Paper: "employ a graph alignment technique to ensure consistency 
     across different local graphs."
+    
+    ✅ FIX: shared_encoder dùng chung 1 projection layer cho tất cả graphs
     """
     import torch
     
     if alignment_method == "none" or len(client_graphs) <= 1:
-        return client_graphs
+        return client_graphs, projection
     
     print(f"[Federated] Applying graph alignment: {alignment_method}")
     
     aligned_graphs = []
+    feat_dims = [g.x.size(1) for g in client_graphs]
+    max_dim = max(feat_dims) if feat_dims else 64
+    target_dim = shared_dim or 64
     
-    if alignment_method == "feature_projection":
-        feat_dims = [g.x.size(1) for g in client_graphs]
-        max_dim = max(feat_dims) if feat_dims else 64
+    if alignment_method == "shared_encoder":
+        # ✅ FIX: Khởi tạo projection 1 lần duy nhất
+        if projection is None:
+            projection = nn.Linear(max_dim, target_dim)
+            print(f"[Federated] Created shared projection: {max_dim} → {target_dim}")
         
-        if shared_dim is not None:
-            target_dim = shared_dim
-        else:
-            target_dim = max_dim
-        
-        print(f"[Federated] Aligning features to dimension {target_dim}")
-        
+        # ✅ Dùng chung projection cho tất cả graphs
+        for g in client_graphs:
+            g_copy = copy.deepcopy(g)
+            if g_copy.x.size(1) < max_dim:
+                padding = torch.zeros(
+                    g_copy.x.size(0), 
+                    max_dim - g_copy.x.size(1), 
+                    device=g_copy.x.device
+                )
+                g_copy.x = torch.cat([g_copy.x, padding], dim=1)
+            g_copy.x = projection(g_copy.x)
+            aligned_graphs.append(g_copy)
+    
+    elif alignment_method == "feature_projection":
+        # ⚠️ DEPRECATED: giữ lại để tương thích ngược
+        print(f"[Federated] Aligning features to dimension {target_dim} (DEPRECATED)")
         for g in client_graphs:
             g_copy = copy.deepcopy(g)
             if g_copy.x.size(1) < target_dim:
@@ -97,28 +117,10 @@ def align_client_graphs(
             g_copy.x = (g_copy.x - mean) / (std + 1e-8)
             aligned_graphs.append(g_copy)
     
-    elif alignment_method == "shared_encoder":
-        feat_dims = [g.x.size(1) for g in client_graphs]
-        max_dim = max(feat_dims) if feat_dims else 64
-        target_dim = shared_dim or 64
-        
-        projection = nn.Linear(max_dim, target_dim)
-        
-        for g in client_graphs:
-            g_copy = copy.deepcopy(g)
-            if g_copy.x.size(1) < max_dim:
-                padding = torch.zeros(
-                    g_copy.x.size(0), 
-                    max_dim - g_copy.x.size(1), 
-                    device=g_copy.x.device
-                )
-                g_copy.x = torch.cat([g_copy.x, padding], dim=1)
-            g_copy.x = projection(g_copy.x)
-            aligned_graphs.append(g_copy)
     else:
         raise ValueError(f"Unknown alignment method: {alignment_method}")
     
-    return aligned_graphs
+    return aligned_graphs, projection
 
 
 class FederatedClient:
@@ -516,11 +518,13 @@ def create_federated_clients_from_raw_data(
             client_graphs.append(graph)
     
     if alignment_method != "none" and client_graphs:
-        client_graphs = align_client_graphs(
+        aligned_graphs, _ = align_client_graphs(
             client_graphs,
             alignment_method=alignment_method,
             shared_dim=cfg.get("model", {}).get("hidden_dim", 64),
+            projection=None,
         )
+        client_graphs = aligned_graphs
     
     for client_id, graph in enumerate(client_graphs):
         client = FederatedClient(
@@ -571,84 +575,13 @@ def create_federated_clients_from_different_datasets(
         client_graphs.append(graph)
     
     if alignment_method != "none" and client_graphs:
-        client_graphs = align_client_graphs(
+        aligned_graphs, _ = align_client_graphs(
             client_graphs,
             alignment_method=alignment_method,
             shared_dim=cfg.get("model", {}).get("hidden_dim", 64),
+            projection=None,
         )
-    
-    for client_id, graph in enumerate(client_graphs):
-        client = FederatedClient(
-            client_id=client_id,
-            data=graph,
-            cfg=cfg,
-            model_class=model_class,
-            device=device,
-        )
-        clients.append(client)
-    
-    return clients
-
-
-# ============================================================
-# ⚠️ HÀM NÀY KHÔNG CÒN ĐƯỢC SỬ DỤNG (GIỮ LẠI ĐỂ THAM KHẢO)
-# ============================================================
-def create_federated_clients_from_single_dataset(
-    cfg: Dict[str, Any],
-    model_class: nn.Module,
-    num_clients: int = 3,
-    device: str = "cpu",
-    alignment_method: str = "none",
-) -> List[FederatedClient]:
-    """
-    ⚠️ DEPRECATED: Hàm này gây data leakage vì đọc lại raw dataset.
-    Hiện tại không còn được sử dụng trong pipeline chính.
-    Giữ lại để tham khảo hoặc dùng cho mục đích debug.
-    """
-    from src.data.load_data import load_dataset
-    from src.data.preprocess import FraudPreprocessor
-    from src.graph.build_graph import build_transaction_graph
-    from src.graph.hybrid_graph import build_hybrid_transaction_graph
-    
-    clients = []
-    client_graphs = []
-    
-    df = load_dataset(cfg)
-    time_col = cfg["dataset"].get("time_col")
-    
-    if time_col and time_col in df.columns:
-        df = df.sort_values(time_col).reset_index(drop=True)
-        n = len(df)
-        shard_size = n // num_clients
-        
-        for client_id in range(num_clients):
-            start = client_id * shard_size
-            end = start + shard_size if client_id < num_clients - 1 else n
-            
-            client_df = df.iloc[start:end].copy()
-            
-            print(f"[Federated] Client {client_id}: {len(client_df)} samples "
-                  f"(time {start} to {end})")
-            
-            pre = FraudPreprocessor(cfg)
-            x, y, t = pre.fit_transform(client_df)
-            
-            flags = cfg.get("flags", {})
-            use_hybrid = flags.get("hybrid_graph", False)
-            
-            if use_hybrid:
-                graph = build_hybrid_transaction_graph(x, y, t, cfg)
-            else:
-                graph = build_transaction_graph(x, y, t, cfg)
-            
-            client_graphs.append(graph)
-    
-    if alignment_method != "none" and client_graphs:
-        client_graphs = align_client_graphs(
-            client_graphs,
-            alignment_method=alignment_method,
-            shared_dim=cfg.get("model", {}).get("hidden_dim", 64),
-        )
+        client_graphs = aligned_graphs
     
     for client_id, graph in enumerate(client_graphs):
         client = FederatedClient(
@@ -683,7 +616,7 @@ def create_federated_clients(
     để tạo client shards.
     """
     fed_cfg = cfg.get("federated", {})
-    alignment_method = fed_cfg.get("alignment_method", "feature_projection")
+    alignment_method = fed_cfg.get("alignment_method", "shared_encoder")  # ✅ FIX: default shared_encoder
     
     # ============================================================
     # ✅ SỬA: Dùng data (train_data) thay vì đọc lại raw dataset
@@ -697,7 +630,6 @@ def create_federated_clients(
         order = torch.arange(num_nodes, device=data.x.device)
     
     shard_size = num_nodes // num_clients
-    clients = []
     client_graphs = []
     
     for client_id in range(num_clients):
@@ -715,18 +647,21 @@ def create_federated_clients(
               f"(time {start} to {end})")
     
     # ============================================================
-    # Áp dụng graph alignment nếu cần
+    # ✅ FIX: Áp dụng graph alignment với shared_encoder và dùng chung projection
     # ============================================================
+    projection = None
     if alignment_method != "none" and client_graphs:
-        client_graphs = align_client_graphs(
+        client_graphs, projection = align_client_graphs(
             client_graphs,
             alignment_method=alignment_method,
             shared_dim=cfg.get("model", {}).get("hidden_dim", 64),
+            projection=projection,  # ← Dùng chung projection
         )
     
     # ============================================================
     # Tạo FederatedClient objects
     # ============================================================
+    clients = []
     for client_id, graph in enumerate(client_graphs):
         client = FederatedClient(
             client_id=client_id,
@@ -737,9 +672,16 @@ def create_federated_clients(
         )
         clients.append(client)
     
+    # ✅ Lưu projection để dùng cho val/test
+    if clients:
+        clients[0]._shared_projection = projection
+    
     return clients
 
 
+# ============================================================
+# ✅ FIX: train_federated áp dụng projection cho val/test
+# ============================================================
 def train_federated(
     train_data,
     val_data,
@@ -763,7 +705,7 @@ def train_federated(
     batch_size = int(fed_cfg.get("batch_size", 64))
     
     # ============================================================
-    # BƯỚC 1: Tạo clients
+    # BƯỚC 1: Tạo clients (có projection)
     # ============================================================
     clients = create_federated_clients(
         data=train_data,
@@ -772,6 +714,11 @@ def train_federated(
         num_clients=num_clients,
         device=device,
     )
+    
+    # ============================================================
+    # ✅ FIX: Lấy projection từ client (dùng chung)
+    # ============================================================
+    projection = getattr(clients[0], '_shared_projection', None) if clients else None
     
     # ============================================================
     # BƯỚC 2: Lấy in_dim thực tế
@@ -783,39 +730,62 @@ def train_federated(
         actual_in_dim = train_data.x.size(1)
     
     # ============================================================
-    # BƯỚC 3: Đồng bộ val_data và test_data
+    # BƯỚC 3: ✅ FIX - Áp dụng projection cho val_data và test_data
     # ============================================================
-    # Đưa về đúng device
     val_data = val_data.to(device)
     test_data = test_data.to(device)
     
-    # Pad hoặc truncate val_data
-    if val_data.x.size(1) != actual_in_dim:
-        print(f"[Federated] Resizing val_data from {val_data.x.size(1)} to {actual_in_dim}")
-        if val_data.x.size(1) < actual_in_dim:
-            padding = torch.zeros(
-                val_data.x.size(0), 
-                actual_in_dim - val_data.x.size(1), 
-                device=device,
-                dtype=val_data.x.dtype
-            )
-            val_data.x = torch.cat([val_data.x, padding], dim=1)
-        else:
-            val_data.x = val_data.x[:, :actual_in_dim]
-    
-    # Pad hoặc truncate test_data
-    if test_data.x.size(1) != actual_in_dim:
-        print(f"[Federated] Resizing test_data from {test_data.x.size(1)} to {actual_in_dim}")
-        if test_data.x.size(1) < actual_in_dim:
-            padding = torch.zeros(
-                test_data.x.size(0), 
-                actual_in_dim - test_data.x.size(1), 
-                device=device,
-                dtype=test_data.x.dtype
-            )
-            test_data.x = torch.cat([test_data.x, padding], dim=1)
-        else:
-            test_data.x = test_data.x[:, :actual_in_dim]
+    if projection is not None:
+        # Áp dụng projection cho val_data
+        if val_data.x.size(1) != projection.in_features:
+            if val_data.x.size(1) < projection.in_features:
+                padding = torch.zeros(
+                    val_data.x.size(0), 
+                    projection.in_features - val_data.x.size(1), 
+                    device=device
+                )
+                val_data.x = torch.cat([val_data.x, padding], dim=1)
+            val_data.x = projection(val_data.x)
+            print(f"[Federated] Applied projection to val_data: → {val_data.x.size(1)}")
+        
+        # Áp dụng projection cho test_data
+        if test_data.x.size(1) != projection.in_features:
+            if test_data.x.size(1) < projection.in_features:
+                padding = torch.zeros(
+                    test_data.x.size(0), 
+                    projection.in_features - test_data.x.size(1), 
+                    device=device
+                )
+                test_data.x = torch.cat([test_data.x, padding], dim=1)
+            test_data.x = projection(test_data.x)
+            print(f"[Federated] Applied projection to test_data: → {test_data.x.size(1)}")
+    else:
+        # Fallback: nếu không có projection, pad/truncate như cũ
+        if val_data.x.size(1) != actual_in_dim:
+            print(f"[Federated] Resizing val_data from {val_data.x.size(1)} to {actual_in_dim}")
+            if val_data.x.size(1) < actual_in_dim:
+                padding = torch.zeros(
+                    val_data.x.size(0), 
+                    actual_in_dim - val_data.x.size(1), 
+                    device=device,
+                    dtype=val_data.x.dtype
+                )
+                val_data.x = torch.cat([val_data.x, padding], dim=1)
+            else:
+                val_data.x = val_data.x[:, :actual_in_dim]
+        
+        if test_data.x.size(1) != actual_in_dim:
+            print(f"[Federated] Resizing test_data from {test_data.x.size(1)} to {actual_in_dim}")
+            if test_data.x.size(1) < actual_in_dim:
+                padding = torch.zeros(
+                    test_data.x.size(0), 
+                    actual_in_dim - test_data.x.size(1), 
+                    device=device,
+                    dtype=test_data.x.dtype
+                )
+                test_data.x = torch.cat([test_data.x, padding], dim=1)
+            else:
+                test_data.x = test_data.x[:, :actual_in_dim]
     
     # ============================================================
     # BƯỚC 4: Tạo server

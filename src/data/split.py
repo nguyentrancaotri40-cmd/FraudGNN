@@ -1,4 +1,7 @@
-# src/data/split.py
+# ============================================================
+# src/data/split.py - FULL FIX (không temporal leakage)
+# ============================================================
+
 from __future__ import annotations
 
 from typing import Dict, Any, Tuple
@@ -22,7 +25,7 @@ def split_dataframe(df: pd.DataFrame, cfg: Dict[str, Any]) -> Tuple[pd.DataFrame
     df = df.copy().reset_index(drop=True)
     
     # ============================================================
-    # ✅ TEMPORAL SPLIT (giống paper) - không shuffle
+    # ✅ TEMPORAL SPLIT (giống paper) - 1 mốc cắt chung
     # ============================================================
     if strategy == "temporal":
         time_col = ds.get("time_col")
@@ -36,56 +39,63 @@ def split_dataframe(df: pd.DataFrame, cfg: Dict[str, Any]) -> Tuple[pd.DataFrame
         n_train = int(n * train_ratio)
         n_val = int(n * val_ratio)
         
+        # ✅ 1 mốc cắt chung cho toàn bộ df
         train_df = df.iloc[:n_train].copy()
         val_df = df.iloc[n_train:n_train+n_val].copy()
         test_df = df.iloc[n_train+n_val:].copy()
     
     # ============================================================
-    # ✅ STRATIFIED TEMPORAL (cho CreditCard - vẫn giữ temporal)
+    # ⚠️ STRATIFIED_TEMPORAL - CÓ THỂ GÂY TEMPORAL LEAKAGE
     # ============================================================
     elif strategy == "stratified_temporal":
+        print("[WARNING] stratified_temporal may cause temporal leakage! Use 'temporal' instead.")
         time_col = ds.get("time_col")
         if time_col and time_col in df.columns:
             df = df.sort_values(time_col).reset_index(drop=True)
-            print(f"[SPLIT] Sorting by time_col: {time_col} (giống paper)")
         else:
             raise ValueError(f"time_col '{time_col}' not found!")
         
-        # ✅ Lấy fraud và normal riêng, giữ thứ tự thời gian trong từng class
-        fraud_df = df[df[label_col] == 1]
-        normal_df = df[df[label_col] == 0]
+        # ✅ 1 mốc cắt chung, giữ tỷ lệ fraud tự nhiên
+        n = len(df)
+        n_train = int(n * train_ratio)
+        n_val = int(n * val_ratio)
         
-        n_total = len(df)
-        fraud_ratio = len(fraud_df) / n_total
+        train_df = df.iloc[:n_train].copy()
+        val_df = df.iloc[n_train:n_train+n_val].copy()
+        test_df = df.iloc[n_train+n_val:].copy()
         
-        n_train = int(n_total * train_ratio)
-        n_val = int(n_total * val_ratio)
-        
-        # Tính số fraud trong từng split theo tỷ lệ
-        n_fraud_train = int(n_train * fraud_ratio)
-        n_fraud_val = int(n_val * fraud_ratio)
-        
-        # Lấy fraud (theo thứ tự thời gian)
-        fraud_train = fraud_df.iloc[:n_fraud_train]
-        fraud_remaining = fraud_df.iloc[n_fraud_train:]
-        fraud_val = fraud_remaining.iloc[:n_fraud_val]
-        fraud_test = fraud_remaining.iloc[n_fraud_val:]
-        
-        # Lấy normal theo số lượng tương ứng
-        n_normal_train = n_train - len(fraud_train)
-        n_normal_val = n_val - len(fraud_val)
-        
-        normal_train = normal_df.iloc[:n_normal_train]
-        normal_remaining = normal_df.iloc[n_normal_train:]
-        normal_val = normal_remaining.iloc[:n_normal_val]
-        normal_test = normal_remaining.iloc[n_normal_val:]
-        
-        # Ghép lại và sort theo thời gian
-        train_df = pd.concat([fraud_train, normal_train]).sort_values(time_col).reset_index(drop=True)
-        val_df = pd.concat([fraud_val, normal_val]).sort_values(time_col).reset_index(drop=True)
-        test_df = pd.concat([fraud_test, normal_test]).sort_values(time_col).reset_index(drop=True)
+        # Log tỷ lệ fraud trong từng split
+        print(f"[SPLIT] Fraud ratio in Train: {train_df[label_col].mean():.4f}")
+        print(f"[SPLIT] Fraud ratio in Val: {val_df[label_col].mean():.4f}")
+        print(f"[SPLIT] Fraud ratio in Test: {test_df[label_col].mean():.4f}")
     
+    # ============================================================
+    # ✅ STRATIFIED RANDOM (cho Credit Card 2023)
+    # ============================================================
     elif strategy == "stratified_random":
+        print(f"[SPLIT] Using stratified random split (giống paper)")
+        
+        # 1. Split train + temp
+        train_df, temp_df = train_test_split(
+            df,
+            train_size=train_ratio,
+            random_state=random_state,
+            stratify=df[label_col] if df[label_col].nunique() > 1 else None,
+        )
+        
+        # 2. Split temp → val + test
+        val_size_rel = val_ratio / (1 - train_ratio)
+        val_df, test_df = train_test_split(
+            temp_df,
+            train_size=val_size_rel,
+            random_state=random_state,
+            stratify=temp_df[label_col] if temp_df[label_col].nunique() > 1 else None,
+        )
+    
+    # ============================================================
+    # ✅ RANDOM SPLIT (fallback)
+    # ============================================================
+    elif strategy == "random":
         train_df, temp_df = train_test_split(
             df,
             train_size=train_ratio,
@@ -99,8 +109,24 @@ def split_dataframe(df: pd.DataFrame, cfg: Dict[str, Any]) -> Tuple[pd.DataFrame
             random_state=random_state,
             stratify=temp_df[label_col] if temp_df[label_col].nunique() > 1 else None,
         )
+    
     else:
         raise ValueError(f"Unknown split strategy: {strategy}")
+
+    # ============================================================
+    # ✅ VALIDATION CỨNG: KHÔNG cho phép split 100% 1 class
+    # ============================================================
+    for name, split_df in [("Train", train_df), ("Val", val_df), ("Test", test_df)]:
+        label_mean = split_df[label_col].mean()
+        if label_mean == 0.0 or label_mean == 1.0:
+            raise ValueError(
+                f"❌ CRITICAL: {name} split has {label_mean*100:.0f}% {'fraud' if label_mean == 1.0 else 'normal'} samples!\n"
+                f"  This means temporal split is WRONG for this dataset.\n"
+                f"  For datasets without real timestamps (e.g., CreditCard2023), use 'stratified_random' strategy.\n"
+                f"  Current strategy: {strategy}\n"
+                f"  Time col: {ds.get('time_col', 'None')}\n"
+                f"  Dataset: {cfg.get('experiment', {}).get('dataset', 'unknown')}"
+            )
 
     # ✅ LOG CHI TIẾT
     print(f"\n{'='*60}")
@@ -115,11 +141,6 @@ def split_dataframe(df: pd.DataFrame, cfg: Dict[str, Any]) -> Tuple[pd.DataFrame
     print(f"  Train - fraud: {train_df[label_col].sum():,} ({train_df[label_col].mean()*100:.4f}%)")
     print(f"  Val   - fraud: {val_df[label_col].sum():,} ({val_df[label_col].mean()*100:.4f}%)")
     print(f"  Test  - fraud: {test_df[label_col].sum():,} ({test_df[label_col].mean()*100:.4f}%)")
-    
-    # ✅ Cảnh báo nếu split bị 100% fraud
-    for name, split_df in [("Train", train_df), ("Val", val_df), ("Test", test_df)]:
-        if split_df[label_col].mean() == 1.0:
-            print(f"  ⚠️ WARNING: {name} split has 100% fraud samples!")
     print(f"{'='*60}")
 
     return train_df.reset_index(drop=True), val_df.reset_index(drop=True), test_df.reset_index(drop=True)
