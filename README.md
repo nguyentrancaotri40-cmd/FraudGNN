@@ -7,11 +7,11 @@ Project này dựng lại pipeline **FraudGNN-RL** dựa trên mô tả trong pa
 
 ---
 
-# 📌 Lưu ý khoa học quan trọng
+# Lưu ý khoa học quan trọng
 
-Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy project này là bản **reproduction from paper description**, tái hiện gần nhất có thể theo thuật toán và thông số được mô tả.
+Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy project này là bản reproduction from paper description, tái hiện gần nhất có thể theo thuật toán và thông số được mô tả.
 
-**Code đã được tối ưu để giống paper 100%** về:
+Code đã được tối ưu để giống paper 100% về:
 
 - **Temporal GRU (Eq 6-7):** GRU layer xử lý tuần tự trên toàn bộ chuỗi giao dịch
 - **RL State (Section IV-B):** State = graph embedding từ TSSGC
@@ -23,29 +23,46 @@ Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy proj
 
 ---
 
-# ✅ Các điểm bám sát paper
+# Các điểm bám sát paper
 
-- Dữ liệu giao dịch được biến thành **transaction graph** (theo implementation của paper ở Section V-A-4).
+Dữ liệu giao dịch được biến thành transaction graph (theo implementation của paper ở Section V-A-4).
+
 - Node là transaction trong graph similarity-time.
 - Edge được tạo khi transaction gần nhau theo thời gian và cosine similarity vượt ngưỡng.
-- **TSSGC** gồm 3 thành phần (giống paper Eq 5-11):
-  - **Temporal modeling (Eq 6-7):** GRU layer + time-aware attention trên toàn bộ chuỗi giao dịch
-  - **Spatial modeling (Eq 8-9):** GAT attention
-  - **Semantic modeling (Eq 10):** Type embedding (entity type)
-- TSSGC mặc định 3 layers, hidden dimension 64.
-- Classifier sinh fraud score.
-- **RL Agent** hỗ trợ cả:
-  - **Vanilla DQN (discrete action)** - giống paper Eq 12
-  - **NAF (continuous action)** - có thể bật qua config `rl.type: naf`
-- **State** = graph embedding từ TSSGC (giống paper Section IV-B)
-- **Reward** = accuracy - fpr_penalty * fpr (combination of accuracy and FPR)
-- **Federated Learning** với FedAvg (giống paper)
-- **Client Creation:** Mỗi client có graph riêng (giống paper Algorithm 1)
-- **Metric:** AUC-ROC, AUC-PR, F1, Recall@1%
+
+TSSGC gồm 3 thành phần (giống paper Eq 5-11):
+
+- **Temporal modeling (Eq 6-7):** GRU layer + time-aware attention trên toàn bộ chuỗi giao dịch
+- **Spatial modeling (Eq 8-9):** GAT attention
+- **Semantic modeling (Eq 10):** Type embedding (entity type)
+
+TSSGC mặc định 3 layers, hidden dimension 64.
+
+Classifier sinh fraud score.
+
+RL Agent hỗ trợ cả:
+
+- Vanilla DQN (discrete action) - giống paper Eq 12
+- NAF (continuous action) - có thể bật qua config `rl.type: naf`
+
+State = graph embedding từ TSSGC (giống paper Section IV-B)
+
+Reward = accuracy - fpr_penalty * fpr (combination of accuracy and FPR)
+
+Federated Learning với FedAvg (giống paper)
+
+Client Creation: Mỗi client có graph riêng (giống paper Algorithm 1)
+
+Metric:
+
+- AUC-ROC
+- AUC-PR
+- F1
+- Recall@1%
 
 ---
 
-# 🛠️ Các lỗi đã được fix
+# Các lỗi đã được fix
 
 | Lỗi | Mô tả | Trạng thái |
 |------|--------|------------|
@@ -60,7 +77,7 @@ Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy proj
 
 ---
 
-# 📂 Cấu trúc thư mục
+# Cấu trúc thư mục
 
 ```text
 FRAUDGNN/
@@ -130,7 +147,7 @@ FRAUDGNN/
 └── README.md
 ```
 
-# 🔧 Cài đặt
+# Cài đặt
 
 ## 1. Tạo môi trường ảo
 
@@ -160,7 +177,7 @@ Lưu ý: Nếu torch-geometric bị lỗi, cài theo hướng dẫn chính thứ
 
 ---
 
-# 📊 Chuẩn bị dữ liệu
+# Chuẩn bị dữ liệu
 
 Đặt file dataset vào `data/raw/` và sửa đường dẫn trong file config.
 
@@ -190,7 +207,7 @@ Config: `configs/ieee_cis.yaml`
 
 ---
 
-# 🚀 Chạy reproduction
+# Chạy reproduction
 
 ## Baseline (FraudGNN-RL)
 
@@ -231,7 +248,7 @@ outputs/checkpoints/dqn_threshold_agent.pt
 
 ---
 
-# 📈 Pipeline
+# Pipeline
 
 ```text
 Raw Transaction Data
@@ -265,22 +282,33 @@ Evaluation
 
 ---
 
-# 📊 Metrics
+# Metrics
 
 - AUC-ROC
+
 - AUC-PR
+
 - F1-score
+
 - Precision
+
 - Recall
+
 - Recall@1%
+
 - FPR
+
 - FNR
+
 - Latency (ms)
+
 - Throughput (samples/s)
+
 - Memory usage (RAM/VRAM)
+
 ---
 
-# 🧪 Kiểm tra nhanh
+# Kiểm tra nhanh
 
 ## Unit tests
 
@@ -294,9 +322,7 @@ python -m pytest tests/ -v
 python -m src.main_pipeline --config configs/test.yaml
 ```
 
----
-
-# ⚠️ Giới hạn của bản reproduction
+# Giới hạn của bản reproduction
 
 Do tác giả chưa public source code, một số chi tiết phải diễn giải kỹ thuật:
 
@@ -316,12 +342,12 @@ Do tác giả chưa public source code, một số chi tiết phải diễn gi�
 
 ---
 
-# ⚙️ Cấu hình chính
+# Cấu hình chính
 
 ## Flags
 
 | Flag | Mặc định | Mô tả |
-|------|:--------:|------|
+|------|----------|-------|
 | hard_edges | true | Sử dụng hard edges (baseline) |
 | soft_edges | false | Sử dụng soft edges (hybrid) 🆕 |
 | hybrid_graph | false | Kết hợp hard + soft edges 🆕 |
@@ -331,10 +357,12 @@ Do tác giả chưa public source code, một số chi tiết phải diễn gi�
 | pruning | false | Bật pruning 🆕 |
 | dqn | true | Dùng DQN (nếu rl.type: dqn) |
 
+---
+
 ## RL Config
 
 | Key | Mặc định | Mô tả |
-|------|:--------:|------|
+|-----|----------|-------|
 | rl.type | dqn | dqn hoặc naf |
 | rl.threshold_bins | [0.05, ...] | Discrete bins cho DQN |
 | rl.epochs | 30-100 | Số epochs train RL |
@@ -342,7 +370,7 @@ Do tác giả chưa public source code, một số chi tiết phải diễn gi�
 
 ---
 
-# 📚 Tham khảo
+# Tham khảo
 
 Paper: FraudGNN-RL: A Graph Neural Network With Reinforcement Learning for Adaptive Financial Fraud Detection
 
@@ -350,7 +378,7 @@ IEEE JOCS 2025
 
 ---
 
-# 📄 License
+# License
 
 MIT License
 
@@ -373,3 +401,4 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
