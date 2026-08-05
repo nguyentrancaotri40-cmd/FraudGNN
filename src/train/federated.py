@@ -1,5 +1,5 @@
 # ============================================================
-# FILE: src/train/federated.py
+# FILE: src/train/federated.py - FULL COMPLETE
 # Federated Learning with FedAvg for FraudGNN-RL
 # GIỐNG PAPER 100%: 
 #   - FedAvg trung bình cộng không trọng số (Algorithm 1)
@@ -23,13 +23,13 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
-# ✅ FIX 1: shared_encoder dùng chung 1 projection layer
+# ✅ FIX: align_client_graphs - dùng shared_encoder
 # ============================================================
 def align_client_graphs(
     client_graphs: List[Any],
     alignment_method: str = "feature_projection",
     shared_dim: Optional[int] = None,
-    projection: Optional[nn.Module] = None,  # ← THÊM: dùng chung projection
+    projection: Optional[nn.Module] = None,
 ) -> tuple[List[Any], Optional[nn.Module]]:
     """
     ✅ GIỐNG PAPER: Graph alignment technique (Section IV.C).
@@ -138,25 +138,26 @@ class FederatedClient:
         self.data = data
         self.cfg = copy.deepcopy(cfg)
         self.device = device
-        print(f"[Federated] Client {client_id} on {self.device} with {data.x.size(0)} nodes")
-        
-        model_cfg = cfg.get("model", {})
-        self.model = model_class(
-            in_dim=data.x.size(-1),
-            hidden_dim=int(model_cfg.get("hidden_dim", 64)),
-            num_layers=int(model_cfg.get("num_layers", 3)),
-            num_node_types=int(model_cfg.get("num_node_types", 1)),
-            dropout=float(model_cfg.get("dropout", 0.2)),
-        ).to(self.device)
-        
         self.num_samples = data.x.size(0)
+        self.model = None  # ✅ FIX: KHÔNG tạo model ở đây
+        self.optimizer = None
+        print(f"[Federated] Client {client_id} on {self.device} with {data.x.size(0)} nodes")
+    
+    def set_model(self, model: nn.Module):
+        """✅ FIX: Set model từ global_model (có projection)."""
+        self.model = copy.deepcopy(model)
+        self.model.to(self.device)
         self.optimizer = None
     
     def set_weights(self, weights: OrderedDict):
+        if self.model is None:
+            raise RuntimeError("Model not initialized! Call set_model() first.")
         self.model.load_state_dict(weights)
         self.optimizer = None
     
     def get_weights(self) -> OrderedDict:
+        if self.model is None:
+            raise RuntimeError("Model not initialized!")
         return self.model.state_dict()
     
     def get_num_samples(self) -> int:
@@ -175,17 +176,21 @@ class FederatedClient:
         from src.eval.evaluate import predict_scores
         from src.eval.metrics import classification_metrics
         
+        if self.model is None:
+            raise RuntimeError("Model not initialized!")
+        
         device = self.device
         data = self.data.to(device)
+        model = self.model.to(device)
         
         self.optimizer = torch.optim.Adam(
-            self.model.parameters(),
+            model.parameters(),
             lr=lr,
             weight_decay=float(self.cfg.get("train", {}).get("weight_decay", 1e-4))
         )
         
         pos_weight = _pos_weight(data.y).to(device)
-        self.model.train()
+        model.train()
         
         if use_pruning:
             from src.utils.pruning import apply_pruning_inplace, update_pruning_mask, get_pruning_stats
@@ -200,16 +205,16 @@ class FederatedClient:
             from src.utils.pruning import _PRUNABLE
             has_mask = any(
                 hasattr(module, 'weight_mask')
-                for _, module in self.model.named_modules()
+                for _, module in model.named_modules()
                 if isinstance(module, _PRUNABLE)
             )
             
             if not has_mask:
-                apply_pruning_inplace(self.model, amount=amount)
+                apply_pruning_inplace(model, amount=amount)
             else:
-                update_pruning_mask(self.model, amount=amount)
+                update_pruning_mask(model, amount=amount)
             
-            stats = get_pruning_stats(self.model)
+            stats = get_pruning_stats(model)
             print(f"[Federated] Client {self.client_id}, Round {current_round}: "
                   f"pruned {stats['pruning_ratio']*100:.2f}% of weights")
         
@@ -235,16 +240,16 @@ class FederatedClient:
             for batch in loader:
                 batch = batch.to(device)
                 self.optimizer.zero_grad()
-                logits = self.model(batch)
+                logits = model(batch)
                 loss = torch.nn.functional.binary_cross_entropy_with_logits(
                     logits,
                     batch.y.float(),
                     pos_weight=pos_weight
                 )
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 5.0)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
                 self.optimizer.step()
-                epoch_loss += loss.item()
+                epoch_loss += loss.detach().item()
                 epoch_batches += 1
             
             total_loss += epoch_loss
@@ -254,14 +259,16 @@ class FederatedClient:
         
         if use_pruning:
             from src.utils.pruning import remove_pruning
-            self.model = remove_pruning(self.model)
+            model = remove_pruning(model)
         
-        self.model.eval()
+        model.eval()
         with torch.no_grad():
-            logits = self.model(data)
+            logits = model(data)
             scores = torch.sigmoid(logits).cpu().numpy().flatten()
             labels = data.y.cpu().numpy().flatten()
             metrics = classification_metrics(labels, scores, threshold=0.5)
+        
+        self.model = model
         
         return {
             "loss": avg_loss,
@@ -275,6 +282,9 @@ class FederatedClient:
     def evaluate(self, data) -> Dict[str, float]:
         from src.eval.evaluate import predict_scores
         from src.eval.metrics import classification_metrics
+        
+        if self.model is None:
+            raise RuntimeError("Model not initialized!")
         
         self.model.eval()
         with torch.no_grad():
@@ -319,11 +329,6 @@ class FederatedServer:
             raise ValueError(f"Unknown aggregation method: {method}")
     
     def _fedavg_aggregate(self, clients: List[FederatedClient]) -> OrderedDict:
-        """
-        ✅ GIỐNG PAPER 100%: Trung bình cộng không trọng số.
-        
-        Paper Algorithm 1, dòng 7: θ_t = (1/|C_t|) Σ_{i∈C_t} θ_i^t
-        """
         num_clients = len(clients)
         avg_weights = OrderedDict()
         
@@ -368,7 +373,9 @@ class FederatedServer:
         use_pruning: bool = False,
         verbose: bool = True,
     ) -> Dict[str, float]:
+        # ✅ FIX: Broadcast model và weights
         for client in clients:
+            client.set_model(self.global_model)
             client.set_weights(self.global_weights)
         
         losses = []
@@ -615,72 +622,38 @@ def create_federated_clients(
     Fix: Sử dụng data (train_data) đã được split từ pipeline_fraudgnn.py
     để tạo client shards.
     """
-    fed_cfg = cfg.get("federated", {})
-    alignment_method = fed_cfg.get("alignment_method", "shared_encoder")  # ✅ FIX: default shared_encoder
-    
-    # ============================================================
-    # ✅ SỬA: Dùng data (train_data) thay vì đọc lại raw dataset
-    # ============================================================
     num_nodes = data.x.size(0)
     
-    # Sắp xếp theo thời gian nếu có
     if hasattr(data, "node_time"):
         order = torch.argsort(data.node_time)
     else:
         order = torch.arange(num_nodes, device=data.x.device)
     
     shard_size = num_nodes // num_clients
-    client_graphs = []
+    clients = []
     
     for client_id in range(num_clients):
         start = client_id * shard_size
         end = start + shard_size if client_id < num_clients - 1 else num_nodes
         
-        # Lấy subset của graph
         idx = order[start:end]
-        
-        # Tạo subgraph từ train_data
         client_data = data.subgraph(idx)
-        client_graphs.append(client_data)
         
-        print(f"[Federated] Client {client_id}: {client_data.x.size(0)} samples "
-              f"(time {start} to {end})")
-    
-    # ============================================================
-    # ✅ FIX: Áp dụng graph alignment với shared_encoder và dùng chung projection
-    # ============================================================
-    projection = None
-    if alignment_method != "none" and client_graphs:
-        client_graphs, projection = align_client_graphs(
-            client_graphs,
-            alignment_method=alignment_method,
-            shared_dim=cfg.get("model", {}).get("hidden_dim", 64),
-            projection=projection,  # ← Dùng chung projection
-        )
-    
-    # ============================================================
-    # Tạo FederatedClient objects
-    # ============================================================
-    clients = []
-    for client_id, graph in enumerate(client_graphs):
         client = FederatedClient(
             client_id=client_id,
-            data=graph,
+            data=client_data,
             cfg=cfg,
             model_class=model_class,
             device=device,
         )
         clients.append(client)
-    
-    # ✅ Lưu projection để dùng cho val/test
-    if clients:
-        clients[0]._shared_projection = projection
+        print(f"[Federated] Client {client_id}: {client_data.x.size(0)} samples")
     
     return clients
 
 
 # ============================================================
-# ✅ FIX: train_federated áp dụng projection cho val/test
+# ✅ FIX: train_federated - sử dụng projection trong model
 # ============================================================
 def train_federated(
     train_data,
@@ -691,7 +664,7 @@ def train_federated(
     device: str = "cpu",
     use_pruning: bool = False,
 ) -> Dict[str, Any]:
-    """Full federated training pipeline với graph alignment (giống paper)."""
+    """Full federated training pipeline."""
     from src.models.fraudgnn_rl import FraudGNNRL
     from src.eval.evaluate import predict_scores
     from src.eval.metrics import classification_metrics
@@ -705,7 +678,31 @@ def train_federated(
     batch_size = int(fed_cfg.get("batch_size", 64))
     
     # ============================================================
-    # BƯỚC 1: Tạo clients (có projection)
+    # BƯỚC 1: Tạo global model với projection (trainable)
+    # ============================================================
+    actual_in_dim = train_data.x.size(1)
+    model_cfg = cfg.get("model", {})
+    hidden_dim = int(model_cfg.get("hidden_dim", 64))
+    
+    # ✅ FIX: Dùng projection cho shared_encoder
+    alignment_method = fed_cfg.get("alignment_method", "shared_encoder")
+    use_projection = (alignment_method == "shared_encoder")
+    
+    global_model = FraudGNNRL(
+        in_dim=actual_in_dim,
+        hidden_dim=hidden_dim,
+        num_layers=int(model_cfg.get("num_layers", 3)),
+        num_node_types=int(model_cfg.get("num_node_types", 1)),
+        dropout=float(model_cfg.get("dropout", 0.2)),
+        use_projection=use_projection,
+        projection_dim=hidden_dim,
+    ).to(device)
+    
+    if use_projection:
+        print(f"[Federated] Global model has trainable projection: {actual_in_dim} → {hidden_dim}")
+    
+    # ============================================================
+    # BƯỚC 2: Tạo clients
     # ============================================================
     clients = create_federated_clients(
         data=train_data,
@@ -715,88 +712,19 @@ def train_federated(
         device=device,
     )
     
-    # ============================================================
-    # ✅ FIX: Lấy projection từ client (dùng chung)
-    # ============================================================
-    projection = getattr(clients[0], '_shared_projection', None) if clients else None
+    # ✅ FIX: Set model cho từng client từ global_model
+    for client in clients:
+        client.set_model(global_model)
+        client.set_weights(global_model.state_dict())
     
     # ============================================================
-    # BƯỚC 2: Lấy in_dim thực tế
+    # BƯỚC 3: Tạo server
     # ============================================================
-    if clients:
-        actual_in_dim = clients[0].data.x.size(1)
-        print(f"[Federated] Actual in_dim after alignment: {actual_in_dim}")
-    else:
-        actual_in_dim = train_data.x.size(1)
-    
-    # ============================================================
-    # BƯỚC 3: ✅ FIX - Áp dụng projection cho val_data và test_data
-    # ============================================================
-    val_data = val_data.to(device)
-    test_data = test_data.to(device)
-    
-    if projection is not None:
-        # Áp dụng projection cho val_data
-        if val_data.x.size(1) != projection.in_features:
-            if val_data.x.size(1) < projection.in_features:
-                padding = torch.zeros(
-                    val_data.x.size(0), 
-                    projection.in_features - val_data.x.size(1), 
-                    device=device
-                )
-                val_data.x = torch.cat([val_data.x, padding], dim=1)
-            val_data.x = projection(val_data.x)
-            print(f"[Federated] Applied projection to val_data: → {val_data.x.size(1)}")
-        
-        # Áp dụng projection cho test_data
-        if test_data.x.size(1) != projection.in_features:
-            if test_data.x.size(1) < projection.in_features:
-                padding = torch.zeros(
-                    test_data.x.size(0), 
-                    projection.in_features - test_data.x.size(1), 
-                    device=device
-                )
-                test_data.x = torch.cat([test_data.x, padding], dim=1)
-            test_data.x = projection(test_data.x)
-            print(f"[Federated] Applied projection to test_data: → {test_data.x.size(1)}")
-    else:
-        # Fallback: nếu không có projection, pad/truncate như cũ
-        if val_data.x.size(1) != actual_in_dim:
-            print(f"[Federated] Resizing val_data from {val_data.x.size(1)} to {actual_in_dim}")
-            if val_data.x.size(1) < actual_in_dim:
-                padding = torch.zeros(
-                    val_data.x.size(0), 
-                    actual_in_dim - val_data.x.size(1), 
-                    device=device,
-                    dtype=val_data.x.dtype
-                )
-                val_data.x = torch.cat([val_data.x, padding], dim=1)
-            else:
-                val_data.x = val_data.x[:, :actual_in_dim]
-        
-        if test_data.x.size(1) != actual_in_dim:
-            print(f"[Federated] Resizing test_data from {test_data.x.size(1)} to {actual_in_dim}")
-            if test_data.x.size(1) < actual_in_dim:
-                padding = torch.zeros(
-                    test_data.x.size(0), 
-                    actual_in_dim - test_data.x.size(1), 
-                    device=device,
-                    dtype=test_data.x.dtype
-                )
-                test_data.x = torch.cat([test_data.x, padding], dim=1)
-            else:
-                test_data.x = test_data.x[:, :actual_in_dim]
-    
-    # ============================================================
-    # BƯỚC 4: Tạo server
-    # ============================================================
-    model_cfg = cfg.get("model", {})
-    
     server = FederatedServer(
         model_class=model_class,
         model_args={
-            "in_dim": actual_in_dim,
-            "hidden_dim": int(model_cfg.get("hidden_dim", 64)),
+            "in_dim": actual_in_dim if not use_projection else hidden_dim,
+            "hidden_dim": hidden_dim,
             "num_layers": int(model_cfg.get("num_layers", 3)),
             "num_node_types": int(model_cfg.get("num_node_types", 1)),
             "dropout": float(model_cfg.get("dropout", 0.2)),
@@ -804,23 +732,17 @@ def train_federated(
         device=device,
     )
     
-    # ============================================================
-    # BƯỚC 5: Cập nhật global_model
-    # ============================================================
-    server.global_model = model_class(
-        in_dim=actual_in_dim,
-        hidden_dim=int(model_cfg.get("hidden_dim", 64)),
-        num_layers=int(model_cfg.get("num_layers", 3)),
-        num_node_types=int(model_cfg.get("num_node_types", 1)),
-        dropout=float(model_cfg.get("dropout", 0.2)),
-    ).to(device)
-    server.global_weights = server.global_model.state_dict()
+    # ✅ FIX: Đồng bộ server với global_model
+    server.global_model = global_model
+    server.global_weights = global_model.state_dict()
     
+    # ✅ FIX: Đồng bộ clients với server
     for client in clients:
+        client.set_model(global_model)
         client.set_weights(server.global_weights)
     
     # ============================================================
-    # BƯỚC 6: Federated training
+    # BƯỚC 4: Federated training
     # ============================================================
     result = server.federated_training(
         clients=clients,
@@ -834,6 +756,12 @@ def train_federated(
     
     global_model = result["final_model"]
     global_model.eval()
+    
+    # ============================================================
+    # BƯỚC 5: Đánh giá
+    # ============================================================
+    val_data = val_data.to(device)
+    test_data = test_data.to(device)
     
     val_scores, val_labels = predict_scores(global_model, val_data, device=device)
     test_scores, test_labels = predict_scores(global_model, test_data, device=device)

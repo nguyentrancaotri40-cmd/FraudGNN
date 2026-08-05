@@ -55,23 +55,22 @@ class ThresholdDQNAgent:
     Paper (Eq 3-4): Vanilla DQN với target network.
     KHÔNG dùng Double DQN.
     
-    ✅ FIX: Thêm target_update_freq để sync target theo steps
-    ✅ FIX: Giảm lr, tăng buffer_size, giảm epsilon_decay
+    ✅ FIX: Soft update (Polyak averaging) thay vì hard sync
     """
     state_dim: int
     thresholds: List[float]
     n_features: int = 10
     hidden_dim: int = 128
     gamma: float = 0.99
-    lr: float = 1e-5              # ✅ FIX: giảm từ 1e-3
+    lr: float = 1e-5
     epsilon_start: float = 1.0
-    epsilon_end: float = 0.01     # ✅ FIX: giảm từ 0.05
-    epsilon_decay: float = 0.9995 # ✅ FIX: giảm từ 0.995
-    buffer_size: int = 100000     # ✅ FIX: tăng từ 10000
+    epsilon_end: float = 0.01
+    epsilon_decay: float = 0.9995
+    buffer_size: int = 100000
     device: str = "cpu"
-    grad_clip: float = 0.5        # ✅ FIX: giảm từ 1.0
-    min_buffer_size: int = 256    # ✅ FIX: tăng từ 64
-    target_update_freq: int = 50  # ✅ THÊM: sync target mỗi N steps
+    grad_clip: float = 0.5
+    min_buffer_size: int = 256
+    tau: float = 0.005                # ✅ Soft update rate
 
     def __post_init__(self):
         self.device = "cuda" if self.device == "cuda" and torch.cuda.is_available() else "cpu"
@@ -82,7 +81,6 @@ class ThresholdDQNAgent:
         self.memory = ReplayBuffer(self.buffer_size)
         self.epsilon = self.epsilon_start
         self.feature_weights = torch.ones(self.n_features, device=self.device) / self.n_features
-        self._sync_counter = 0  # ✅ THÊM: đếm bước để sync target
 
     def act(self, state: np.ndarray, explore: bool = True) -> int:
         if explore and random.random() < self.epsilon:
@@ -94,10 +92,20 @@ class ThresholdDQNAgent:
     def threshold(self, action: int) -> float:
         return float(self.thresholds[action])
 
+    def _soft_update_target(self):
+        """✅ Soft update target network (Polyak averaging)"""
+        for target_param, policy_param in zip(
+            self.target_net.parameters(),
+            self.policy_net.parameters()
+        ):
+            target_param.data.copy_(
+                self.tau * policy_param.data + (1.0 - self.tau) * target_param.data
+            )
+
     def update(self, batch_size: int = 64) -> float | None:
         """
         ✅ GIỐNG PAPER 100%: Vanilla DQN update (Eq 4)
-        ✅ FIX: Gradient clipping, min_buffer_size, sync counter
+        ✅ FIX: Soft update sau mỗi step
         """
         if len(self.memory) < self.min_buffer_size:
             return None
@@ -113,7 +121,6 @@ class ThresholdDQNAgent:
 
         q_values = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
         
-        # ✅ GIỐNG PAPER: Vanilla DQN (target network cho cả selection và evaluation)
         with torch.no_grad():
             next_q = self.target_net(next_states).max(dim=1)[0]
             target = rewards + self.gamma * next_q * (1.0 - dones)
@@ -125,20 +132,18 @@ class ThresholdDQNAgent:
         torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), self.grad_clip)
         self.optimizer.step()
         
-        self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
-        self._sync_counter += 1  # ✅ THÊM: tăng counter
+        # ✅ Soft update target network sau mỗi step
+        self._soft_update_target()
         
+        self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
         return float(loss.item())
     
+    # ✅ Giữ để tương thích ngược
     def should_sync_target(self) -> bool:
-        """✅ THÊM: kiểm tra xem có cần sync target không"""
-        return self._sync_counter >= self.target_update_freq
-
+        return False
+    
     def sync_target(self) -> None:
-        """✅ FIX: reset counter sau khi sync"""
-        self.target_net.load_state_dict(self.policy_net.state_dict())
-        self._sync_counter = 0
-
+        pass
 
 class BatchThresholdEnvironment:
     """
@@ -153,13 +158,13 @@ class BatchThresholdEnvironment:
         self,
         scores: np.ndarray,
         labels: np.ndarray,
-        graph_embeddings: Optional[np.ndarray] = None,  # ✅ State = graph embedding
+        graph_embeddings: Optional[np.ndarray] = None,
         batch_size: int = 256,
         fpr_penalty: float = 2.0,
     ):
         self.scores = np.asarray(scores, dtype=np.float32)
         self.labels = np.asarray(labels, dtype=np.int64)
-        self.graph_embeddings = graph_embeddings  # ✅ Graph embedding từ TSSGC
+        self.graph_embeddings = graph_embeddings
         self.batch_size = int(batch_size)
         self.fpr_penalty = float(fpr_penalty)
         self.pos = 0
@@ -168,7 +173,6 @@ class BatchThresholdEnvironment:
         self.threshold_history = []
         self.memory_size = 10
         
-        # ✅ State dimension = graph embedding dimension (giống paper)
         if self.graph_embeddings is not None:
             self.embedding_dim = self.graph_embeddings.shape[1]
             print(f"[RL ENV] Using graph embeddings as state (dim={self.embedding_dim}) - GIỐNG PAPER")
@@ -178,7 +182,6 @@ class BatchThresholdEnvironment:
 
     @property
     def state_dim(self) -> int:
-        """✅ GIỐNG PAPER: State = graph embedding dimension."""
         return self.embedding_dim
 
     def reset(self) -> np.ndarray:
@@ -194,30 +197,18 @@ class BatchThresholdEnvironment:
         return self.scores[start:end], self.labels[start:end]
 
     def _state_for_current_batch(self) -> np.ndarray:
-        """
-        ✅ GIỐNG PAPER 100%: State = graph embedding từ TSSGC (Section IV-B)
-        KHÔNG dùng fallback state (mean score, std score, etc.)
-        """
         s, y = self._batch()
         if len(s) == 0:
             return np.zeros(self.state_dim, dtype=np.float32)
         
-        # ============================================================
-        # ✅ GIỐNG PAPER: State = Graph Embedding từ TSSGC
-        # ============================================================
         if self.graph_embeddings is not None:
             start = self.pos
             end = min(len(self.scores), start + self.batch_size)
             batch_embeddings = self.graph_embeddings[start:end]
-            # ✅ Lấy mean của graph embeddings trong batch (giống paper)
             state = np.mean(batch_embeddings, axis=0)
             return state.astype(np.float32)
         
-        # ============================================================
-        # ⚠️ FALLBACK: KHÔNG BAO GIỜ DÙNG (chỉ để debug)
-        # ============================================================
         print(f"[WARNING] graph_embeddings is None! Using fallback state (NOT paper)")
-        # Fallback chỉ dùng để không bị lỗi, nhưng KHÔNG giống paper
         return np.array([
             float(np.mean(s)),
             float(np.std(s)),
@@ -238,10 +229,8 @@ class BatchThresholdEnvironment:
         
         base_step = self.batch_size
         pos_step = int(base_step * threshold_factor * fraud_factor)
-        
         remaining = len(self.scores) - self.pos
         pos_step = min(pos_step, remaining)
-        
         return max(1, pos_step)
 
     def step(self, threshold: float):
@@ -261,13 +250,8 @@ class BatchThresholdEnvironment:
         fn = np.sum((pred == 0) & (y == 1))
         tn = np.sum((pred == 0) & (y == 0))
         
-        # ============================================================
-        # ✅ GIỐNG PAPER: Reward = combination of accuracy and FPR
-        # ============================================================
         accuracy = (tp + tn) / max(1, tp + fp + fn + tn)
         fpr = fp / max(1, fp + tn)
-        
-        # ✅ Reward = accuracy - fpr_penalty * fpr (giống paper)
         reward = float(accuracy - self.fpr_penalty * fpr)
         
         pos_step = self._calculate_pos_step(threshold, s, y)

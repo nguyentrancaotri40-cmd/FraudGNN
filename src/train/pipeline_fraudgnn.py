@@ -7,9 +7,12 @@
 #   - Semantic Branch: sử dụng ENTITY TYPE (giống paper Eq 10)
 #   - RL State: Graph Embedding từ TSSGC (giống paper Section IV-B)
 #   - ✅ FIX: RL Agent thực sự được dùng để chọn threshold (giống paper Eq 12)
-#   - ✅ FIX: Target sync theo steps để DQN ổn định
+#   - ✅ FIX: Soft update (Polyak averaging) thay vì hard sync target network
 #   - ✅ FIX: KHÔNG dùng label (y) làm node_type trong SOFT ONLY case
 #   - ✅ FIX: Feature weights áp dụng vào model (giống paper Section IV-B)
+#   - ✅ FIX: Dùng embeddings() thay vì encoder() để có projection
+#   - ✅ FIX: policy_threshold là float, không phải numpy array
+#   - ✅ FIX: Hỗ trợ tau (soft update rate) cho DQN
 # ============================================================
 
 from __future__ import annotations
@@ -544,22 +547,11 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
             embed_dim = global_model.encoder.layers[0].temporal.lin_msg.out_features
             print(f"[RL] Embedding dimension: {embed_dim}")
             
-            # ✅ GIỐNG PAPER: State = graph embedding từ TSSGC
-            val_embeddings = global_model.encoder(
-                val_graph.x.to(device),
-                val_graph.edge_index.to(device),
-                getattr(val_graph, "edge_time_delta", None),
-                getattr(val_graph, "node_type", None),
-                getattr(val_graph, "edge_weight", None),
-            ).cpu().numpy()
-            
-            test_embeddings = global_model.encoder(
-                test_graph.x.to(device),
-                test_graph.edge_index.to(device),
-                getattr(test_graph, "edge_time_delta", None),
-                getattr(test_graph, "node_type", None),
-                getattr(test_graph, "edge_weight", None),
-            ).cpu().numpy()
+            # ============================================================
+            # ✅ FIX: Dùng embeddings() thay vì encoder() để có projection
+            # ============================================================
+            val_embeddings = global_model.embeddings(val_graph).cpu().numpy()
+            test_embeddings = global_model.embeddings(test_graph).cpu().numpy()
             
             print(f"[RL] Graph embeddings shape: {val_embeddings.shape} (GIỐNG PAPER)")
         
@@ -641,10 +633,8 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 fpr_penalty=cfg.get("rl", {}).get("fpr_penalty", 2.0),
             )
             
-            # ✅ FIX: Đọc target_update_freq từ config
-            target_update_freq = cfg.get("rl", {}).get("target_update_freq", 50)
-            
-            # ✅ FIX: state_dim = embedding dimension (64) - GIỐNG PAPER
+            # ✅ FIX: Soft update DQN (Polyak averaging) - KHÔNG dùng target_update_freq
+            # ✅ FIX: state_dim = embedding dimension - GIỐNG PAPER
             agent = ThresholdDQNAgent(
                 state_dim=env.state_dim,
                 thresholds=thresholds,
@@ -655,17 +645,15 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 epsilon_decay=cfg.get("rl", {}).get("epsilon_decay", 0.9995),
                 grad_clip=cfg.get("rl", {}).get("grad_clip", 0.5),
                 min_buffer_size=cfg.get("rl", {}).get("min_buffer_size", 256),
-                target_update_freq=target_update_freq,  # ✅ THÊM
+                tau=cfg.get("rl", {}).get("tau", 0.005),  # ✅ Soft update rate
             )
             
             rl_epochs = cfg.get("rl", {}).get("epochs", 100)
-            global_step = 0
             
             for ep in range(rl_epochs):
                 state = env.reset()
                 done = False
                 ep_loss = []
-                step_in_epoch = 0
                 
                 while not done:
                     action = agent.act(state, explore=True)
@@ -677,33 +665,29 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
                     if loss is not None:
                         ep_loss.append(loss)
                     
-                    # ✅ FIX: Sync target theo số bước (giống paper)
-                    global_step += 1
-                    step_in_epoch += 1
-                    if agent.should_sync_target():
-                        agent.sync_target()
-                        if step_in_epoch % 100 == 0:
-                            print(f"  [DQN] Synced target at step {global_step} (epoch {ep+1})")
-                    
                     state = next_state
                 
-                # ✅ Sync cuối epoch
-                agent.sync_target()
+                # ✅ KHÔNG cần sync_target() cuối epoch (soft update đã làm liên tục)
                 
                 if (ep + 1) % 10 == 0:
                     avg_loss = np.mean(ep_loss) if ep_loss else 0
-                    print(f"  [DQN] Epoch {ep+1}/{rl_epochs}, avg_loss={avg_loss:.4f}, steps={global_step}")
+                    print(f"  [DQN] Epoch {ep+1}/{rl_epochs}, avg_loss={avg_loss:.4f}")
             
             timing["rl_training_sec"] = time.perf_counter() - start
             print(f"[TIMING] DQN trained in {timing['rl_training_sec']:.2f}s")
             
             # ============================================================
-            # ✅ FIX 1: Dùng DQN policy để chọn threshold (GIỐNG PAPER)
+            # ✅ Dùng DQN policy để chọn threshold (GIỐNG PAPER)
             # ============================================================
             # 1. Threshold từ RL policy
-            policy_threshold, policy_metrics = apply_dqn_policy(
+            policy_thresholds, policy_metrics = apply_dqn_policy(
                 agent, val_scores, val_labels, cfg, graph_embeddings=val_embeddings
             )
+            # ✅ FIX: policy_thresholds là numpy array → lấy mean
+            if isinstance(policy_thresholds, np.ndarray):
+                policy_threshold = float(np.mean(policy_thresholds))
+            else:
+                policy_threshold = float(policy_thresholds)
             print(f"[DQN] Threshold from RL policy: {policy_threshold:.4f}")
             
             # 2. Grid-search để so sánh (log riêng)
@@ -721,7 +705,6 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 "grid_threshold": grid_threshold,
                 "grid_f1": grid_metrics.get("f1", 0),
                 "grid_auc_roc": grid_metrics.get("auc_roc", 0),
-                "total_steps": global_step,
                 "final_loss": np.mean(ep_loss) if ep_loss else 0,
             }
             

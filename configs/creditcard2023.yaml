@@ -1,20 +1,3 @@
-# ============================================================
-# CONFIG: CreditCard 2023 - FULL REPRODUCTION (GIỐNG PAPER 100%)
-# ============================================================
-# ✅ Giống paper 100%:
-#   - Temporal split (70-15-15)
-#   - batch_size (64 / 256)
-#   - epochs (100)
-#   - max_neighbors_per_node (3)
-#   - hidden_dim (64), num_layers (3)
-#   - similarity_threshold (0.98)
-#   - federated: true
-#   - Stratified random sampling (giữ tỷ lệ fraud)
-#
-# ⚠️ Chỉ khác paper (để chạy với RAM thấp):
-#   - sample_frac: 0.5 (50% data - paper ko quy định)
-# ============================================================
-
 flags:
   hard_edges: true
   soft_edges: false
@@ -34,16 +17,12 @@ dataset:
   name: CreditCard2023
   path: data/raw/creditcard_2023_fast.csv
   label_col: Class
-  # ✅ FIX: Bỏ time_col (không dùng temporal cho Credit Card)
-  # time_col: id
-  # time_unit: index
   sample_frac: 0.5
-  stratified_sampling: true      # ✅ FIX: true để giữ tỷ lệ fraud
+  stratified_sampling: true
   random_state: 42
 
 split:
-  # ✅ FIX: Dùng stratified_random thay vì temporal
-  strategy: stratified_random    # ✅ GIỐNG PAPER (random split)
+  strategy: stratified_random
   train_ratio: 0.70
   val_ratio: 0.15
 
@@ -64,7 +43,7 @@ model:
   hidden_dim: 64
   num_layers: 3
   dropout: 0.20
-  num_node_types: 2              # ✅ 2 types: normal, fraud
+  num_node_types: 2
 
 train:
   epochs: 100
@@ -79,6 +58,7 @@ rl:
   fpr_penalty: 0.5
   epochs: 100
   batch_size: 256
+  tau: 0.005                     # ✅ THÊM
 
 federated:
   num_clients: 3

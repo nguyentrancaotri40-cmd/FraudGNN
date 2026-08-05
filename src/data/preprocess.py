@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Tuple
 import joblib
 import numpy as np
 import pandas as pd
+from scipy import sparse
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
 from sklearn.compose import ColumnTransformer
@@ -30,23 +31,14 @@ class FraudPreprocessor:
         self.label_col = ds_cfg.get("label_col", "isFraud")
         self.time_col = ds_cfg.get("time_col", None)
         self.drop_cols = pre_cfg.get("drop_cols", [])
-        
-        # FIX C1: Đọc categorical_cols từ config, KHÔNG ghi đè sau
         self.categorical_cols = pre_cfg.get("categorical_cols", [])
         self.numeric_strategy = pre_cfg.get("numeric_strategy", "median")
         self.numeric_cols = []
         self.preprocessor = None
     
     def _identify_columns(self, df: pd.DataFrame) -> None:
-        """
-        Identify numeric and categorical columns.
-        
-        FIX C1: Không ghi đè self.categorical_cols
-        FIX C1 (nâng cao): Lọc config_categorical với drop_cols để tránh xung đột
-        """
         all_cols = set(df.columns)
         
-        # Xác định cột cần drop
         cols_to_drop = set()
         if self.label_col in all_cols:
             cols_to_drop.add(self.label_col)
@@ -58,7 +50,6 @@ class FraudPreprocessor:
         
         feature_cols = all_cols - cols_to_drop
         
-        # FIX C1: Lọc categorical_cols để loại bỏ cột đã drop
         config_categorical = set(self.categorical_cols)
         valid_categorical = config_categorical - cols_to_drop
         
@@ -66,7 +57,6 @@ class FraudPreprocessor:
         detected_categorical = []
         
         for col in feature_cols:
-            # Ưu tiên cột đã khai báo trong config
             if col in valid_categorical:
                 continue
             
@@ -75,10 +65,8 @@ class FraudPreprocessor:
             else:
                 detected_categorical.append(col)
         
-        # FIX C1: Merge config + detected, config được ưu tiên
         self.categorical_cols = list(valid_categorical) + detected_categorical
         
-        # FIX C2: Cảnh báo nếu quá nhiều features
         total_features = len(self.numeric_cols) + len(self.categorical_cols)
         if total_features > 1000:
             warnings.warn(
@@ -89,7 +77,6 @@ class FraudPreprocessor:
             )
     
     def _build_preprocessor(self) -> ColumnTransformer:
-        """Build sklearn ColumnTransformer with memory optimization."""
         transformers = []
         
         if self.numeric_cols:
@@ -114,39 +101,29 @@ class FraudPreprocessor:
         
         return ColumnTransformer(transformers, remainder='drop', verbose_feature_names_out=False)
     
+    def _densify_if_sparse(self, x):
+        """✅ FIX: Convert sparse matrix to dense numpy array."""
+        if sparse.issparse(x):
+            print(f"[PREPROCESS] Converting sparse matrix ({x.shape}) to dense array...")
+            x = x.toarray()
+        return np.asarray(x, dtype=np.float32)
+    
     def fit(self, df: pd.DataFrame) -> FraudPreprocessor:
-        """
-        Fit preprocessor on training data.
-        
-        ✅ FIX D: Ép kiểu TẤT CẢ categorical columns (config + auto-detect)
-        để tránh mixed-type error trong OneHotEncoder.
-        """
-        # ✅ Bước 1: Ép kiểu cho categorical columns đã config (lần 1)
         for col in self.categorical_cols:
             if col in df.columns:
                 df[col] = df[col].astype(str)
         
-        # ✅ Bước 2: Identify columns (phát hiện thêm categorical columns)
         self._identify_columns(df)
         
-        # ✅ Bước 3: Ép kiểu cho TẤT CẢ categorical columns (config + auto-detect) (lần 2)
         for col in self.categorical_cols:
             if col in df.columns:
                 df[col] = df[col].astype(str)
         
-        # ✅ Bước 4: Build và fit preprocessor
         self.preprocessor = self._build_preprocessor()
         self.preprocessor.fit(df)
         return self
     
     def transform(self, df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Transform data: return features, labels, time values.
-        
-        ✅ FIX D: Ép kiểu TẤT CẢ categorical columns trong transform
-        để tránh mixed-type error khi transform dữ liệu mới.
-        """
-        # ✅ Ép kiểu cho TẤT CẢ categorical columns
         for col in self.categorical_cols:
             if col in df.columns:
                 df[col] = df[col].astype(str)
@@ -158,29 +135,24 @@ class FraudPreprocessor:
         else:
             t = np.zeros(len(df), dtype=np.float32)
         
+        # ✅ FIX: Densify sparse output
         X = self.preprocessor.transform(df)
+        X = self._densify_if_sparse(X)
+        
         return X, y, t
     
     def fit_transform(self, df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Fit and transform in one step.
-        
-        FIX: ĐÃ XÓA sample_frac - sampling được thực hiện trong load_data.py
-        """
         self.fit(df)
         return self.transform(df)
     
     def save(self, path: str) -> None:
-        """Save preprocessor to disk."""
         joblib.dump(self, path)
     
     def get_feature_names_out(self) -> List[str]:
-        """Get feature names after preprocessing."""
         if self.preprocessor is not None:
             return self.preprocessor.get_feature_names_out().tolist()
         return []
 
 
 def load_preprocessor(path: str) -> FraudPreprocessor:
-    """Load preprocessor from disk."""
     return joblib.load(path)

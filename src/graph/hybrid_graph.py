@@ -4,6 +4,7 @@ from typing import Any, Dict
 import numpy as np
 import torch
 import time
+from scipy import sparse
 from torch_geometric.data import Data
 
 from src.graph.graph_utils import normalize_time_to_hours
@@ -180,6 +181,15 @@ def build_hybrid_transaction_graph(
     entity_type: np.ndarray | None = None,
 ) -> Data:
     """Build Hybrid Graph for the proposed model."""
+    
+    # ============================================================
+    # ✅ FIX PHÒNG THỦ: Đảm bảo x là dense numpy array
+    # ============================================================
+    if sparse.issparse(x):
+        print(f"[GRAPH HYBRID] Converting sparse matrix ({x.shape}) to dense array...")
+        x = x.toarray()
+    x = np.asarray(x, dtype=np.float32)
+    
     graph_cfg = cfg.get("graph", {})
     hybrid_cfg = cfg.get("hybrid_graph", {})
     dataset_cfg = cfg.get("dataset", {})
@@ -197,7 +207,7 @@ def build_hybrid_transaction_graph(
     
     # ============================================================
     # 1. Build original/baseline graph
-    # ✅ FIX: Không thay đổi x, chỉ dùng để tạo graph
+    # ✅ FIX: build_transaction_graph đã được fix để nhận dense x
     # ============================================================
     base_start = time.perf_counter()
     base_graph = build_transaction_graph(x, y, time_values, cfg, entity_type=entity_type)
@@ -211,7 +221,9 @@ def build_hybrid_transaction_graph(
     
     print(f"[GRAPH] Base graph done: {len(base_edges)} edges in {base_time:.2f}s")
 
+    # ============================================================
     # 2. Build soft behavioral graph
+    # ============================================================
     ds = cfg.get("dataset", {})
     times_hours = normalize_time_to_hours(time_values, ds.get("time_unit"))
 
@@ -227,7 +239,9 @@ def build_hybrid_transaction_graph(
     soft_time = time.perf_counter() - soft_start
     print(f"[GRAPH] Soft graph done: {len(soft_edges)} edges in {soft_time:.2f}s")
 
+    # ============================================================
     # 3. Merge base graph and soft graph
+    # ============================================================
     print(f"[GRAPH] Merging graphs...")
     merge_start = time.perf_counter()
     
@@ -243,7 +257,9 @@ def build_hybrid_transaction_graph(
     merge_time = time.perf_counter() - merge_start
     print(f"[GRAPH] Merge done: {len(merged_edges)} edges in {merge_time:.2f}s")
 
+    # ============================================================
     # 4. Ensure self-loops if requested
+    # ============================================================
     if add_self_loops:
         print(f"[GRAPH] Adding self-loops...")
         merged_edges, merged_delta, edge_source_np, merged_soft_weight = _add_self_loops_if_missing(
@@ -254,7 +270,9 @@ def build_hybrid_transaction_graph(
             num_nodes=x.shape[0],
         )
 
+    # ============================================================
     # 5. Convert to tensors
+    # ============================================================
     edge_index = _make_edge_index(merged_edges)
     edge_source = torch.tensor(edge_source_np, dtype=torch.long)
     edge_weight = _make_edge_weight(
@@ -264,16 +282,20 @@ def build_hybrid_transaction_graph(
     )
 
     # ============================================================
-    # ✅ FIX: KHÔNG BAO GIỜ DÙNG y (label) LÀM NODE_TYPE
+    # 6. ✅ FIX: KHÔNG BAO GIỜ DÙNG y (label) LÀM NODE_TYPE
+    #    Paper Section IV-A-3: e_type(i) = entity type
     # ============================================================
     num_node_types = cfg.get("model", {}).get("num_node_types", 1)
     
     if entity_type is not None:
+        # ✅ ĐÚNG: Dùng entity type từ dữ liệu (giống paper)
         node_type = torch.tensor(entity_type, dtype=torch.long)
         node_type = node_type.clamp(min=0, max=num_node_types - 1)
         unique_types = torch.unique(node_type)
         print(f"[GRAPH] Hybrid: Using ENTITY TYPES from data (num_types={len(unique_types)}) - GIỐNG PAPER")
     else:
+        # ✅ Nếu không có entity type, dùng 1 loại duy nhất
+        # KHÔNG BAO GIỜ dùng label (y) làm node_type
         node_type = torch.zeros(x.shape[0], dtype=torch.long)
         if num_node_types > 1:
             print(f"[WARNING] Hybrid: No entity_type provided! Using single type (NOT using labels)")
@@ -281,10 +303,11 @@ def build_hybrid_transaction_graph(
             print(f"[GRAPH] Hybrid: Using single node type (num_node_types=1)")
 
     # ============================================================
-    # ✅ FIX: x trong data là x gốc, không thêm feature
+    # 7. Build PyG Data object
+    # ✅ FIX: x trong data là x gốc (đã dense)
     # ============================================================
     data = Data(
-        x=torch.tensor(x, dtype=torch.float32),  # ← Không đổi
+        x=torch.tensor(x, dtype=torch.float32),
         y=torch.tensor(y, dtype=torch.long),
         edge_index=edge_index,
         edge_time_delta=torch.tensor(merged_delta, dtype=torch.float32),
@@ -296,7 +319,9 @@ def build_hybrid_transaction_graph(
     if times_hours is not None:
         data.node_time = torch.tensor(times_hours, dtype=torch.float32)
 
-    # 7. Useful debug metadata
+    # ============================================================
+    # 8. Debug metadata
+    # ============================================================
     summary = {
         "num_nodes": int(x.shape[0]),
         "num_base_edges": int(len(base_edges)),

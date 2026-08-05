@@ -1,26 +1,3 @@
-# ============================================================
-# CONFIG: PaySim - SAMPLE (GIỐNG PAPER 100% - EPOCHS 100)
-# ============================================================
-# ✅ GIỐNG PAPER 100%:
-#   - Temporal split (70-15-15)
-#   - batch_size: 64 / 256
-#   - epochs: 100 ✅ GIỮ NGUYÊN
-#   - max_neighbors_per_node: 3
-#   - hidden_dim: 64, num_layers: 3
-#   - similarity_threshold: 0.9
-#   - federated: true
-#   - Stratified random sampling (giữ tỷ lệ fraud)
-#   - Graph alignment (Section IV.C)
-#
-# ⚠️ CHỈ KHÁC PAPER (để test nhanh):
-#   - sample_frac: 0.05 (5% data - paper ko quy định)
-#   - federated.rounds: 3 (giảm để test - paper ko quy định)
-#   - federated.local_epochs: 1 (giảm để test - paper ko quy định)
-#   - patience: 3 (giảm để test - paper ko quy định)
-#   - rl.learning_rate: 0.0001 (giảm để ổn định)
-#   - rl.fpr_penalty: 1.0 (tăng để giảm FPR)
-# ============================================================
-
 flags:
   hard_edges: true
   soft_edges: false
@@ -74,7 +51,7 @@ model:
   num_node_types: 5
 
 train:
-  epochs: 100                      # ✅ GIỮ NGUYÊN (giống paper)
+  epochs: 100
   patience: 3
   batch_size: 64
   learning_rate: 0.001
@@ -92,9 +69,10 @@ rl:
     - 0.35
     - 0.40
   fpr_penalty: 1.0
-  epochs: 100                      # ✅ GIỮ NGUYÊN (giống paper)
+  epochs: 100
   batch_size: 256
   learning_rate: 0.0001
+  tau: 0.005                     # ✅ THÊM
 
 federated:
   num_clients: 3

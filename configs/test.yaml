@@ -1,22 +1,24 @@
 # ============================================================
-# CONFIG: TEST - CHẠY NHANH (GIỐNG PAPER)
+# CONFIG: TEST DQN - SOFT UPDATE (GIỐNG PAPER)
 # ============================================================
 # ✅ Giống paper 100% về methodology:
-#   - Temporal split (70-15-15)
+#   - Temporal split (80-10-10) cho PaySim
 #   - batch_size (64 / 256)
 #   - max_neighbors_per_node (3)
 #   - hidden_dim (64), num_layers (3)
 #   - similarity_threshold (0.9)
 #   - Stratified random sampling
 #   - Federated Learning (bật)
+#   - Entity graph: node = user (giữ nameOrig/nameDest)
+#   - DQN: 100 epochs để kiểm tra loss trend
+#   - ✅ FIX: Soft update (tau) thay vì hard sync
 #
 # ⚠️ Chỉ khác paper để test nhanh:
-#   - sample_frac: 0.01 (1% data)
-#   - epochs: 1 (chỉ 1 epoch)
-#   - patience: 1
-#   - rl.epochs: 1
-#   - federated.rounds: 1
+#   - sample_frac: 0.02 (2% data)
+#   - train.epochs: 1 (chỉ 1 epoch cho FL)
+#   - federated.rounds: 5 (vẫn giữ 5 để test FL)
 #   - federated.local_epochs: 1
+#   - rl.epochs: 100 ✅ GIỮ NGUYÊN để kiểm tra loss
 # ============================================================
 
 flags:
@@ -30,7 +32,7 @@ flags:
   dqn: true
 
 experiment:
-  name: test
+  name: test_dqn_soft
   pipeline: fraudgnn_rl
   dataset: paysim
 
@@ -40,19 +42,20 @@ dataset:
   label_col: isFraud
   time_col: step
   time_unit: hour
-  sample_frac: 0.01            # ⚠️ 1% data để test nhanh
-  stratified_sampling: true    # ✅ GIỐNG PAPER
+  sample_frac: 0.02
+  stratified_sampling: true
   random_state: 42
 
 split:
-  strategy: temporal           # ✅ GIỐNG PAPER
-  train_ratio: 0.70
-  val_ratio: 0.15
+  strategy: temporal
+  train_ratio: 0.80
+  val_ratio: 0.10
 
 preprocess:
   drop_cols:
-    - nameOrig
-    - nameDest
+    # ✅ GIỮ nameOrig và nameDest (entity graph)
+    # - nameOrig
+    # - nameDest
     - isFlaggedFraud
   categorical_cols:
     - type
@@ -61,39 +64,50 @@ preprocess:
 graph:
   type: transaction_similarity
   time_window_hours: 1.0
-  similarity_threshold: 0.9    # ✅ GIỐNG PAPER (0.9)
-  max_neighbors_per_node: 3    # ✅ GIỐNG PAPER (3)
+  similarity_threshold: 0.9
+  max_neighbors_per_node: 3
   add_self_loops: true
 
 model:
-  hidden_dim: 64               # ✅ GIỐNG PAPER
-  num_layers: 3                # ✅ GIỐNG PAPER
+  hidden_dim: 64
+  num_layers: 3
   dropout: 0.20
   num_node_types: 5
 
 train:
-  epochs: 1                    # ⚠️ Test nhanh (paper: 100)
-  patience: 1                  # ⚠️ Test nhanh
-  batch_size: 64               # ✅ GIỐNG PAPER
+  epochs: 1
+  patience: 1
+  batch_size: 64
   learning_rate: 0.001
   weight_decay: 0.0001
 
+# ============================================================
+# ✅ DQN CONFIG - SOFT UPDATE
+# ============================================================
 rl:
   enabled: true
-  threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]  # ✅ GIỐNG PAPER
+  threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
   fpr_penalty: 0.5
-  epochs: 1                    # ⚠️ Test nhanh (paper: 100)
-  batch_size: 256              # ✅ GIỐNG PAPER
+  epochs: 100
+  batch_size: 256
+  learning_rate: 0.000001       # ✅ Giảm thêm
+  buffer_size: 200000           # ✅ Tăng buffer
+  epsilon_start: 1.0
+  epsilon_end: 0.01
+  epsilon_decay: 0.9999         # ✅ Giảm chậm hơn
+  tau: 0.005                    # ✅ Soft update rate (Polyak averaging)
+  grad_clip: 0.5
+  min_buffer_size: 512
 
 federated:
   num_clients: 3
-  rounds: 5                    # ⚠️ Test nhanh (paper: 20)
-  local_epochs: 1              # ⚠️ Test nhanh (paper: 5)
+  rounds: 5
+  local_epochs: 1
   learning_rate: 0.001
-  batch_size: 64               # ✅ GIỐNG PAPER
+  batch_size: 64
   aggregation: fedavg
-  align_graphs: true           # ✅ GIỐNG PAPER (Section IV.C)
-  alignment_method: shared_encoder  # ✅ GIỐNG PAPER
+  align_graphs: true
+  alignment_method: shared_encoder
 
 threshold_selection:
   metric: custom
