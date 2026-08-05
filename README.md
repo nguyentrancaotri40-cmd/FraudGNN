@@ -2,63 +2,65 @@
 
 Project này dựng lại pipeline **FraudGNN-RL** dựa trên mô tả trong paper:
 
-> FraudGNN-RL: A Graph Neural Network With Reinforcement Learning for Adaptive Financial Fraud Detection  
+> **FraudGNN-RL: A Graph Neural Network With Reinforcement Learning for Adaptive Financial Fraud Detection**  
 > IEEE JOCS 2025
 
 ---
 
-## Lưu ý khoa học quan trọng
+# 📌 Lưu ý khoa học quan trọng
 
 Paper gốc chưa công bố source code chính thức trong PDF. Vì vậy project này là bản **reproduction from paper description**, tái hiện gần nhất có thể theo thuật toán và thông số được mô tả.
 
 **Code đã được tối ưu để giống paper 100%** về:
 
-- **Temporal GRU** (Eq 6-7): GRU layer xử lý tuần tự trên toàn bộ chuỗi giao dịch
-- **RL State** (Section IV-B): State = graph embedding từ TSSGC
-- **DQN Update** (Eq 12): Vanilla DQN (target network để chọn và đánh giá action)
-- **Reward Function**: Combination of accuracy and false positive rate
-- **FedAvg Aggregation**: Trung bình có trọng số theo số lượng mẫu (n_i / n_total)
-- **Client Creation** (Algorithm 1): Mỗi client có graph riêng
-- **Graph Alignment** (Section IV.C): Đồng bộ feature giữa các client
+- **Temporal GRU (Eq 6-7):** GRU layer xử lý tuần tự trên toàn bộ chuỗi giao dịch
+- **RL State (Section IV-B):** State = graph embedding từ TSSGC
+- **DQN Update (Eq 12):** Vanilla DQN (target network để chọn và đánh giá action)
+- **Reward Function:** Combination of accuracy and false positive rate
+- **FedAvg Aggregation:** Trung bình cộng không trọng số (1/|C_t| Σ θ_i)
+- **Client Creation (Algorithm 1):** Mỗi client có graph riêng
+- **Graph Alignment (Section IV.C):** Feature projection để đồng bộ các client
 
 ---
 
-## Các điểm bám sát paper
+# ✅ Các điểm bám sát paper
 
 - Dữ liệu giao dịch được biến thành **transaction graph** (theo implementation của paper ở Section V-A-4).
 - Node là transaction trong graph similarity-time.
 - Edge được tạo khi transaction gần nhau theo thời gian và cosine similarity vượt ngưỡng.
 - **TSSGC** gồm 3 thành phần (giống paper Eq 5-11):
-  - **Temporal modeling** (Eq 6-7): GRU layer + time-aware attention trên toàn bộ chuỗi giao dịch
-  - **Spatial modeling** (Eq 8-9): GAT attention
-  - **Semantic modeling** (Eq 10): Type embedding
+  - **Temporal modeling (Eq 6-7):** GRU layer + time-aware attention trên toàn bộ chuỗi giao dịch
+  - **Spatial modeling (Eq 8-9):** GAT attention
+  - **Semantic modeling (Eq 10):** Type embedding (entity type)
 - TSSGC mặc định 3 layers, hidden dimension 64.
 - Classifier sinh fraud score.
 - **RL Agent** hỗ trợ cả:
-  - **Vanilla DQN** (discrete action) - giống paper Eq 12
-  - **NAF** (continuous action) - có thể bật qua config `rl.type: naf`
+  - **Vanilla DQN (discrete action)** - giống paper Eq 12
+  - **NAF (continuous action)** - có thể bật qua config `rl.type: naf`
 - **State** = graph embedding từ TSSGC (giống paper Section IV-B)
 - **Reward** = accuracy - fpr_penalty * fpr (combination of accuracy and FPR)
 - **Federated Learning** với FedAvg (giống paper)
-- **Client Creation**: Mỗi client có graph riêng (giống paper Algorithm 1)
-- **Metric**: AUC-ROC, AUC-PR, F1, Recall@1%
+- **Client Creation:** Mỗi client có graph riêng (giống paper Algorithm 1)
+- **Metric:** AUC-ROC, AUC-PR, F1, Recall@1%
 
 ---
 
-## Các lỗi đã được fix
+# 🛠️ Các lỗi đã được fix
 
 | Lỗi | Mô tả | Trạng thái |
 |------|--------|------------|
-| **#E** | Federated Learning bỏ qua train/test split |  Đã fix |
-| **#A** | Threshold được chọn dựa trên test set |  Đã fix |
-| **#B** | Online adaptation state không cập nhật đúng |  Đã fix |
-| **#C** | State RL chứa mean(y) (label leakage) |  Đã fix |
-| **#D** | Semantic branch bị vô hiệu hóa |  Đã fix |
-| **#F** | GRU sequence bị đảo ngược thời gian |  Đã fix |
+| #E | Federated Learning bỏ qua train/test split | ✅ Đã fix |
+| #A | Threshold được chọn dựa trên test set | ✅ Đã fix |
+| #B | Online adaptation state không cập nhật đúng | ✅ Đã fix |
+| #C | State RL chứa mean(y) (label leakage) | ✅ Đã fix |
+| #D | Semantic branch bị vô hiệu hóa | ✅ Đã fix |
+| #F | GRU sequence bị đảo ngược thời gian | ✅ Đã fix |
+| #G | Sparse matrix từ OneHotEncoder gây lỗi ArrayMemoryError | ✅ Đã fix |
+| #H | DQN target network hard sync gây loss tăng | ✅ Đã fix (soft update) |
 
 ---
 
-## Cấu trúc thư mục
+# 📂 Cấu trúc thư mục
 
 ```text
 FRAUDGNN/
@@ -66,6 +68,7 @@ FRAUDGNN/
 │   ├── paysim.yaml
 │   ├── creditcard2023.yaml
 │   ├── ieee_cis.yaml
+│   ├── test.yaml
 │   └── ablation/                    # Ablation study configs
 │
 ├── data/
@@ -76,22 +79,22 @@ FRAUDGNN/
 ├── src/                             # Source code chính
 │   ├── data/                        # Data loading & preprocessing
 │   │   ├── load_data.py
-│   │   ├── preprocess.py
+│   │   ├── preprocess.py            # ✅ Fix: densify sparse
 │   │   └── split.py
 │   ├── graph/                       # Graph building
 │   │   ├── build_graph.py           # Hard edges (baseline)
 │   │   ├── hybrid_graph.py          # Hard + Soft edges (FraudGNN-RL+)
 │   │   ├── soft_behavior_graph.py   # Soft edges (tối ưu FAISS)
-│   │   └── graph_utils.py           # Utils (vectorized hard edges)
+│   │   └── graph_utils.py           # Utils ✅ Fix: causal direction
 │   ├── models/                      # Models
 │   │   ├── fraudgnn_rl.py           # Main model
-│   │   ├── tssgc.py                 # TSSGC encoder (Temporal GRU fix)
+│   │   ├── tssgc.py                 # TSSGC encoder ✅ Fix: GRU sequence
 │   │   ├── classifier.py            # Fraud classifier
-│   │   ├── dqn_agent.py             # DQN agent (Vanilla DQN + Reward fix)
+│   │   ├── dqn_agent.py             # DQN agent ✅ Fix: soft update (Polyak)
 │   │   └── naf_agent.py             # NAF agent (continuous)
 │   ├── train/                       # Training logic
 │   │   ├── pipeline_fraudgnn.py     # Main pipeline (entry point)
-│   │   ├── federated.py             # Federated Learning (FedAvg)
+│   │   ├── federated.py             # Federated Learning ✅ Fix: data leakage
 │   │   ├── train_gnn.py             # TSSGC training
 │   │   └── train_rl.py              # RL training (DQN/NAF)
 │   ├── eval/                        # Evaluation
@@ -127,9 +130,9 @@ FRAUDGNN/
 └── README.md
 ```
 
-## Cài đặt
+# 🔧 Cài đặt
 
-### 1. Tạo môi trường ảo
+## 1. Tạo môi trường ảo
 
 ```bash
 python -m venv venv
@@ -137,13 +140,13 @@ source venv/bin/activate       # Linux/Mac
 # venv\Scripts\activate        # Windows
 ```
 
-### 2. Cài dependencies
+## 2. Cài dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Cài PyTorch với CUDA (nếu có GPU)
+## 3. Cài PyTorch với CUDA (nếu có GPU)
 
 ```bash
 # Xóa PyTorch CPU
@@ -157,11 +160,11 @@ Lưu ý: Nếu torch-geometric bị lỗi, cài theo hướng dẫn chính thứ
 
 ---
 
-## Chuẩn bị dữ liệu
+# 📊 Chuẩn bị dữ liệu
 
 Đặt file dataset vào `data/raw/` và sửa đường dẫn trong file config.
 
-### PaySim
+## PaySim
 
 ```text
 data/raw/paysim_fast.csv
@@ -169,7 +172,7 @@ data/raw/paysim_fast.csv
 
 Config: `configs/paysim.yaml`
 
-### Credit Card 2023
+## Credit Card 2023
 
 ```text
 data/raw/creditcard_2023_fast.csv
@@ -177,7 +180,7 @@ data/raw/creditcard_2023_fast.csv
 
 Config: `configs/creditcard2023.yaml`
 
-### IEEE-CIS
+## IEEE-CIS
 
 ```text
 data/raw/ieee_cis_fast.csv
@@ -187,21 +190,21 @@ Config: `configs/ieee_cis.yaml`
 
 ---
 
-## Chạy reproduction
+# 🚀 Chạy reproduction
 
-### Baseline (FraudGNN-RL)
+## Baseline (FraudGNN-RL)
 
 ```bash
 python -m src.main_pipeline --config configs/paysim.yaml
 ```
 
-### Test nhanh (1% data)
+## Test nhanh (2% data)
 
 ```bash
 python -m src.main_pipeline --config configs/test.yaml
 ```
 
-### Hybrid (FraudGNN-RL+) - soft edges + weighted fusion
+## Hybrid (FraudGNN-RL+) - soft edges + weighted fusion
 
 ```bash
 # Sửa flags trong config:
@@ -212,7 +215,7 @@ python -m src.main_pipeline --config configs/test.yaml
 python -m src.main_pipeline --config configs/paysim_hybrid.yaml
 ```
 
-### Ablation Study
+## Ablation Study
 
 ```bash
 python scripts/run/run_ablation_timing.py
@@ -228,18 +231,18 @@ outputs/checkpoints/dqn_threshold_agent.pt
 
 ---
 
-## Pipeline
+# 📈 Pipeline
 
 ```text
 Raw Transaction Data
         ↓
 Train / Validation / Test Split
         ↓
-Preprocessing
+Preprocessing (✅ densify sparse)
         ↓
 Transaction Graph Construction
    ├── Hard Edges (baseline)
-   └── Soft Edges (hybrid)
+   └── Soft Edges (hybrid) 🆕
         ↓
 TSSGC Encoder
    ├── Temporal Modeling (GRU + time decay) → Eq 6-7
@@ -262,7 +265,7 @@ Evaluation
 
 ---
 
-## Metrics
+# 📊 Metrics
 
 - AUC-ROC
 - AUC-PR
@@ -275,18 +278,17 @@ Evaluation
 - Latency (ms)
 - Throughput (samples/s)
 - Memory usage (RAM/VRAM)
-
 ---
 
-## Kiểm tra nhanh
+# 🧪 Kiểm tra nhanh
 
-### Unit tests
+## Unit tests
 
 ```bash
 python -m pytest tests/ -v
 ```
 
-### Test pipeline với 1% data
+## Test pipeline với 2% data
 
 ```bash
 python -m src.main_pipeline --config configs/test.yaml
@@ -294,7 +296,7 @@ python -m src.main_pipeline --config configs/test.yaml
 
 ---
 
-## Giới hạn của bản reproduction
+# ⚠️ Giới hạn của bản reproduction
 
 Do tác giả chưa public source code, một số chi tiết phải diễn giải kỹ thuật:
 
@@ -314,32 +316,33 @@ Do tác giả chưa public source code, một số chi tiết phải diễn gi�
 
 ---
 
-## Cấu hình chính
+# ⚙️ Cấu hình chính
 
-### Flags
+## Flags
 
 | Flag | Mặc định | Mô tả |
-|------|----------|------|
+|------|:--------:|------|
 | hard_edges | true | Sử dụng hard edges (baseline) |
-| soft_edges | false | Sử dụng soft edges (hybrid) |
-| hybrid_graph | false | Kết hợp hard + soft edges |
-| weighted_fusion | false | Weighted fusion cho hybrid |
-| federated | false | Bật Federated Learning |
+| soft_edges | false | Sử dụng soft edges (hybrid) 🆕 |
+| hybrid_graph | false | Kết hợp hard + soft edges 🆕 |
+| weighted_fusion | false | Weighted fusion cho hybrid 🆕 |
+| federated | true | Bật Federated Learning |
 | rl | true | Bật RL agent |
-| pruning | false | Bật pruning |
+| pruning | false | Bật pruning 🆕 |
 | dqn | true | Dùng DQN (nếu rl.type: dqn) |
 
-### RL Config
+## RL Config
 
 | Key | Mặc định | Mô tả |
-|------|----------|------|
+|------|:--------:|------|
 | rl.type | dqn | dqn hoặc naf |
 | rl.threshold_bins | [0.05, ...] | Discrete bins cho DQN |
-| rl.epochs | 30 | Số epochs train RL |
+| rl.epochs | 30-100 | Số epochs train RL |
+| rl.tau | 0.005 | Soft update rate ✅ |
 
 ---
 
-## Tham khảo
+# 📚 Tham khảo
 
 Paper: FraudGNN-RL: A Graph Neural Network With Reinforcement Learning for Adaptive Financial Fraud Detection
 
@@ -347,7 +350,7 @@ IEEE JOCS 2025
 
 ---
 
-## License
+# 📄 License
 
 MIT License
 
