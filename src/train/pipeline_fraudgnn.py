@@ -13,6 +13,8 @@
 #   - ✅ FIX: Dùng embeddings() thay vì encoder() để có projection
 #   - ✅ FIX: policy_threshold là float, không phải numpy array
 #   - ✅ FIX: Hỗ trợ tau (soft update rate) cho DQN
+#   - ✅ FIX: Mặc định dùng NAF (có feature weights) thay vì DQN
+#   - ✅ FIX: 5-fold Cross-Validation (giống paper)
 # ============================================================
 
 from __future__ import annotations
@@ -21,14 +23,15 @@ import copy
 import pickle
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 import numpy as np
+import pandas as pd
 import torch
 from torch_geometric.data import Data
 
 from src.data.load_data import load_dataset
-from src.data.split import split_dataframe
+from src.data.split import split_dataframe, get_cv_splits
 from src.data.preprocess import FraudPreprocessor
 from src.graph.build_graph import build_transaction_graph
 from src.graph.hybrid_graph import build_hybrid_transaction_graph
@@ -115,7 +118,6 @@ def _extract_entity_type(df, cfg: Dict[str, Any]) -> np.ndarray | None:
     elif dataset_name.lower() in ["ieee", "ieee-cis", "ieee_cis"]:
         # Cách 1: Dùng ProductCD
         if "ProductCD" in df.columns:
-            # Mã hóa ProductCD thành số
             product_types = df["ProductCD"].astype('category').cat.codes.values
             print(f"[ENTITY TYPE] IEEE-CIS: Using 'ProductCD' ({len(np.unique(product_types))} types)")
             return product_types
@@ -171,19 +173,13 @@ def build_graph_from_flags(x, y, t, cfg, flags, entity_type=None):
         edge_index = make_edge_tensors(soft_edges, num_nodes=x.shape[0], self_loops=True)
         edge_time_delta = np.concatenate([soft_delta, np.zeros(x.shape[0], dtype=np.float32)])
         
-        # ============================================================
-        # ✅ FIX: KHÔNG BAO GIỜ DÙNG y (label) LÀM NODE_TYPE
-        # ============================================================
         num_node_types = cfg.get("model", {}).get("num_node_types", 1)
         
         if entity_type is not None:
-            # ✅ ĐÚNG: Dùng entity type từ dữ liệu
             node_type = torch.tensor(entity_type, dtype=torch.long)
             node_type = node_type.clamp(min=0, max=num_node_types - 1)
             print(f"[GRAPH SOFT] Using ENTITY TYPES from data")
         else:
-            # ✅ Nếu không có entity type, dùng 1 loại duy nhất
-            # KHÔNG BAO GIỜ dùng label (y) làm node_type
             node_type = torch.zeros(x.shape[0], dtype=torch.long)
             if num_node_types > 1:
                 print(f"[WARNING SOFT] No entity_type provided! Using single type (NOT using labels)")
@@ -195,7 +191,7 @@ def build_graph_from_flags(x, y, t, cfg, flags, entity_type=None):
             y=torch.tensor(y, dtype=torch.long),
             edge_index=edge_index,
             edge_time_delta=torch.tensor(edge_time_delta, dtype=torch.float32),
-            node_type=node_type,  # ← ĐÃ SỬA: KHÔNG label leakage
+            node_type=node_type,
             edge_weight=torch.ones(edge_index.size(1), dtype=torch.float32),
         )
         
@@ -228,14 +224,12 @@ def build_graph_from_flags(x, y, t, cfg, flags, entity_type=None):
                 cfg_clone["hybrid_graph"].pop(key, None)
             print("  [HYBRID] UNWEIGHTED fusion")
         
-        # ✅ FIX: Truyền entity_type vào hybrid graph
         return build_hybrid_transaction_graph(x, y, t, cfg_clone, entity_type=entity_type)
     
     # ============================================================
     # CASE 3: BASELINE (hard edges only) — FraudGNN-RL
     # ============================================================
     print("  [BASELINE] hard edges only")
-    # ✅ FIX: Truyền entity_type vào build_transaction_graph
     return build_transaction_graph(x, y, t, cfg, entity_type=entity_type)
 
 
@@ -244,7 +238,6 @@ def get_or_build_graph(x, y, t, cfg, flags, name="train", entity_type=None):
     graph_dir = Path("data/graphs/cache")
     graph_dir.mkdir(parents=True, exist_ok=True)
     
-    # ✅ Thêm entity_type vào cache key
     entity_type_str = "_".join(map(str, entity_type[:10])) if entity_type is not None else "no_entity"
     
     cache_parts = [
@@ -317,7 +310,6 @@ def simulate_online_adaptation(
     adaptive_fprs = []
     
     while not done:
-        # ✅ FIX: explore=False khi đánh giá
         action = agent.act(state, explore=False)
         threshold = agent.threshold(action)
         
@@ -369,12 +361,22 @@ def simulate_online_adaptation(
     }
 
 
-def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    """Main pipeline - GIỐNG PAPER 100%."""
+def run_pipeline_on_split(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    test_df: Optional[pd.DataFrame],
+    cfg: Dict[str, Any],
+    fold_idx: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Chạy pipeline trên một split cụ thể (train/val/test).
     
+    Được sử dụng bởi:
+    - run_pipeline() cho single split
+    - run_cv_pipeline() cho cross-validation
+    """
     seed = int(cfg.get("dataset", {}).get("random_state", 42))
     set_seed(seed)
-    ensure_dirs("data/processed", "data/graphs", "outputs/checkpoints", "outputs/results")
     
     flags = resolve_flags(cfg)
     use_federated = flags.get("federated", True)
@@ -382,7 +384,7 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
     use_pruning = flags.get("pruning", False)
     
     # ============================================================
-    # 1. LOAD & PREPROCESS
+    # 1. TIMING
     # ============================================================
     timing = {
         "data_loading_sec": 0.0,
@@ -400,128 +402,97 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
     }
     
     total_start = time.perf_counter()
-    print(f"[TIMING] Pipeline started at: {total_start}")
-    
-    # Data loading
-    start = time.perf_counter()
-    print(f"[TIMING] Loading data...")
-    df = load_dataset(cfg)
-    timing["data_loading_sec"] = time.perf_counter() - start
-    print(f"[TIMING] Data loaded in {timing['data_loading_sec']:.2f}s")
-    
-    # Split
-    start = time.perf_counter()
-    print(f"[TIMING] Splitting data...")
-    train_df, val_df, test_df = split_dataframe(df, cfg)
-    timing["data_splitting_sec"] = time.perf_counter() - start
-    print(f"[TIMING] Data split in {timing['data_splitting_sec']:.2f}s")
+    fold_str = f"Fold {fold_idx+1}/" if fold_idx is not None else ""
+    print(f"[TIMING] {fold_str}Pipeline started at: {total_start}")
     
     # ============================================================
-    # ✅ FIX: Trích xuất ENTITY TYPE từ dataframe (GIỐNG PAPER)
+    # 2. ENTITY TYPE
     # ============================================================
-    print("[TIMING] Extracting entity types...")
+    dfs_to_concat = [train_df, val_df]
+    if test_df is not None:
+        dfs_to_concat.append(test_df)
     
-    # Lấy entity type từ toàn bộ dataframe
-    entity_type_full = _extract_entity_type(df, cfg)
+    combined_df = pd.concat(dfs_to_concat, ignore_index=True)
+    entity_type_full = _extract_entity_type(combined_df, cfg)
     
-    # Tách entity type cho train/val/test
     if entity_type_full is not None:
-        # Lấy index của từng split
         train_idx = train_df.index
         val_idx = val_df.index
-        test_idx = test_df.index
-        
         entity_type_train = entity_type_full[train_idx]
         entity_type_val = entity_type_full[val_idx]
-        entity_type_test = entity_type_full[test_idx]
-        
-        print(f"[ENTITY TYPE] Train: {len(np.unique(entity_type_train))} types")
-        print(f"[ENTITY TYPE] Val: {len(np.unique(entity_type_val))} types")
-        print(f"[ENTITY TYPE] Test: {len(np.unique(entity_type_test))} types")
+        if test_df is not None:
+            test_idx = test_df.index
+            entity_type_test = entity_type_full[test_idx]
+        else:
+            entity_type_test = None
     else:
         entity_type_train = None
         entity_type_val = None
         entity_type_test = None
-        print("[ENTITY TYPE] No entity type available, using fallback")
     
-    # Preprocess
+    # ============================================================
+    # 3. PREPROCESS
+    # ============================================================
     start = time.perf_counter()
-    print(f"[TIMING] Preprocessing...")
     pre = FraudPreprocessor(cfg)
     x_train, y_train, t_train = pre.fit_transform(train_df)
     x_val, y_val, t_val = pre.transform(val_df)
-    x_test, y_test, t_test = pre.transform(test_df)
+    if test_df is not None:
+        x_test, y_test, t_test = pre.transform(test_df)
+    else:
+        x_test, y_test, t_test = None, None, None
     timing["preprocessing_sec"] = time.perf_counter() - start
-    print(f"[TIMING] Preprocess done in {timing['preprocessing_sec']:.2f}s")
-    
-    # Build graph - ✅ TRUYỀN ENTITY TYPE
-    start = time.perf_counter()
-    print(f"[TIMING] Building graphs with ENTITY TYPE...")
-    
-    train_graph = get_or_build_graph(
-        x_train, y_train, t_train, cfg, flags, 
-        name="train", 
-        entity_type=entity_type_train
-    )
-    val_graph = get_or_build_graph(
-        x_val, y_val, t_val, cfg, flags, 
-        name="val", 
-        entity_type=entity_type_val
-    )
-    test_graph = get_or_build_graph(
-        x_test, y_test, t_test, cfg, flags, 
-        name="test", 
-        entity_type=entity_type_test
-    )
-    
-    timing["graph_building_sec"] = time.perf_counter() - start
-    print(f"[TIMING] Graphs built in {timing['graph_building_sec']:.2f}s")
-    
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"[TIMING] Using device: {device}")
     
     # ============================================================
-    # 2. FEDERATED LEARNING (hoặc local training)
+    # 4. BUILD GRAPHS
+    # ============================================================
+    start = time.perf_counter()
+    train_graph = get_or_build_graph(x_train, y_train, t_train, cfg, flags, "train", entity_type_train)
+    val_graph = get_or_build_graph(x_val, y_val, t_val, cfg, flags, "val", entity_type_val)
+    if test_df is not None:
+        test_graph = get_or_build_graph(x_test, y_test, t_test, cfg, flags, "test", entity_type_test)
+    else:
+        test_graph = None
+    timing["graph_building_sec"] = time.perf_counter() - start
+    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # ============================================================
+    # 5. FEDERATED LEARNING
     # ============================================================
     if use_federated:
         start = time.perf_counter()
-        print(f"[TIMING] Starting Federated Learning...")
-        
         fed_result = train_federated(
             train_data=train_graph,
             val_data=val_graph,
-            test_data=test_graph,
+            test_data=test_graph if test_graph is not None else val_graph,
             cfg=cfg,
             model_class=FraudGNNRL,
             device=device,
             use_pruning=use_pruning,
         )
         timing["federated_training_sec"] = time.perf_counter() - start
-        print(f"[TIMING] Federated Learning done in {timing['federated_training_sec']:.2f}s")
-        
         timing["federated_avg_round_time_sec"] = fed_result.get("avg_round_time_sec", 0)
         timing["federated_round_times"] = fed_result.get("round_times", [])
         
         global_model = fed_result["global_model"]
         val_scores = fed_result["val_scores"]
         val_labels = fed_result["val_labels"]
-        test_scores = fed_result["test_scores"]
-        test_labels = fed_result["test_labels"]
+        if test_graph is not None:
+            test_scores = fed_result["test_scores"]
+            test_labels = fed_result["test_labels"]
+        else:
+            test_scores, test_labels = None, None
         fed_history = fed_result["history"]
     else:
         from src.train.train_gnn import train_tssgc_classifier
-        
         start = time.perf_counter()
-        print(f"[TIMING] Starting Local Training...")
-        
         model, history, ckpt_path, tssgc_timing = train_tssgc_classifier(
             train_graph, val_graph, cfg,
             output_dir="outputs/checkpoints/ablation",
             timing=timing,
         )
         timing["federated_training_sec"] = time.perf_counter() - start
-        print(f"[TIMING] Local Training done in {timing['federated_training_sec']:.2f}s")
-        
         timing["tssgc_avg_epoch_time_sec"] = tssgc_timing.get("avg_epoch_time_sec", 0)
         timing["tssgc_epoch_times"] = tssgc_timing.get("epoch_times", [])
         timing["tssgc_total_training_sec"] = tssgc_timing.get("total_training_sec", 0)
@@ -529,13 +500,16 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
         global_model = model
         fed_history = history
         val_scores, val_labels = predict_scores(global_model, val_graph, device=device)
-        test_scores, test_labels = predict_scores(global_model, test_graph, device=device)
+        if test_graph is not None:
+            test_scores, test_labels = predict_scores(global_model, test_graph, device=device)
+        else:
+            test_scores, test_labels = None, None
     
     # ============================================================
-    # 3. ✅ RL THRESHOLD - CHỈ TRÊN VALIDATION (GIỐNG PAPER)
+    # 6. RL THRESHOLD
     # ============================================================
     thresholds = [float(x) for x in cfg.get("rl", {}).get("threshold_bins", [0.5])]
-    rl_type = cfg.get("rl", {}).get("type", "dqn")
+    rl_type = cfg.get("rl", {}).get("type", "naf")
     agent = None
     val_embeddings = None
     test_embeddings = None
@@ -545,23 +519,13 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
         global_model.eval()
         with torch.no_grad():
             embed_dim = global_model.encoder.layers[0].temporal.lin_msg.out_features
-            print(f"[RL] Embedding dimension: {embed_dim}")
-            
-            # ============================================================
-            # ✅ FIX: Dùng embeddings() thay vì encoder() để có projection
-            # ============================================================
             val_embeddings = global_model.embeddings(val_graph).cpu().numpy()
-            test_embeddings = global_model.embeddings(test_graph).cpu().numpy()
-            
-            print(f"[RL] Graph embeddings shape: {val_embeddings.shape} (GIỐNG PAPER)")
+            if test_graph is not None:
+                test_embeddings = global_model.embeddings(test_graph).cpu().numpy()
         
         if rl_type == "naf":
-            print(f"[NAF] Using Normalized Advantage Functions (continuous action)")
-            from src.models.naf_agent import train_naf_agent, BatchNAFEnvironment
-            
+            from src.models.naf_agent import train_naf_agent
             start = time.perf_counter()
-            print(f"[TIMING] Training NAF on validation set...")
-            
             agent, rl_history = train_naf_agent(
                 val_scores, val_labels, cfg, 
                 graph_embeddings=val_embeddings,
@@ -569,41 +533,21 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 n_features=embed_dim
             )
             timing["rl_training_sec"] = time.perf_counter() - start
-            print(f"[TIMING] NAF trained in {timing['rl_training_sec']:.2f}s")
             
-            # ============================================================
-            # ✅ FIX: Áp dụng feature weights vào model (GIỐNG PAPER Section IV-B)
-            # ============================================================
-            # Lấy feature weights từ NAF agent
             first_state = val_embeddings[0] if len(val_embeddings) > 0 else np.zeros(embed_dim)
             feature_weights = agent.get_feature_weights(first_state)
-            
-            # ✅ Gọi set_feature_weights() để áp dụng vào model
             global_model.set_feature_weights(torch.tensor(feature_weights, dtype=torch.float32))
-            print(f"[NAF] Applied feature weights to model (sum={feature_weights.sum():.4f})")
-            
-            # ✅ Recompute embeddings với feature weights mới
             val_embeddings = global_model.embeddings(val_graph).cpu().numpy()
-            test_embeddings = global_model.embeddings(test_graph).cpu().numpy()
-            print(f"[NAF] Recomputed embeddings with feature weights")
+            if test_graph is not None:
+                test_embeddings = global_model.embeddings(test_graph).cpu().numpy()
             
-            # ============================================================
-            # ✅ Dùng NAF policy để chọn threshold (GIỐNG PAPER)
-            # ============================================================
-            # 1. Threshold từ RL policy
             policy_threshold, policy_metrics = apply_naf_policy(
                 agent, val_scores, val_labels, cfg, graph_embeddings=val_embeddings
             )
-            print(f"[NAF] Threshold from RL policy: {policy_threshold:.4f}")
-            
-            # 2. Grid-search để so sánh (log riêng)
             grid_threshold, grid_metrics = choose_best_threshold_by_validation(
                 val_scores, val_labels, thresholds, cfg=cfg
             )
-            print(f"[NAF] Grid-search threshold: {grid_threshold:.4f} (for comparison only)")
-            print(f"[NAF] Difference: {abs(policy_threshold - grid_threshold):.4f}")
             
-            # ✅ Dùng policy threshold cho benchmark
             best_threshold = policy_threshold
             val_threshold_metrics = {
                 "threshold_selection_method": "naf_policy",
@@ -614,18 +558,10 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 "feature_weights_applied": True,
                 "feature_weights_sum": float(feature_weights.sum()),
             }
-            
-            print(f"[NAF] Val F1 (policy): {classification_metrics(val_labels, val_scores, threshold=policy_threshold).get('f1', 0):.4f}")
-            print(f"[NAF] Val F1 (grid): {grid_metrics.get('f1', 0):.4f}")
-            
         else:
-            print(f"[DQN] Using DQN (discrete action)")
             from src.models.dqn_agent import ThresholdDQNAgent, BatchThresholdEnvironment
-            
             start = time.perf_counter()
-            print(f"[TIMING] Training DQN on validation set...")
             
-            # ✅ FIX: TRUYỀN graph_embeddings vào RL Environment (GIỐNG PAPER)
             env = BatchThresholdEnvironment(
                 val_scores, val_labels,
                 graph_embeddings=val_embeddings,
@@ -633,8 +569,6 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 fpr_penalty=cfg.get("rl", {}).get("fpr_penalty", 2.0),
             )
             
-            # ✅ FIX: Soft update DQN (Polyak averaging) - KHÔNG dùng target_update_freq
-            # ✅ FIX: state_dim = embedding dimension - GIỐNG PAPER
             agent = ThresholdDQNAgent(
                 state_dim=env.state_dim,
                 thresholds=thresholds,
@@ -645,59 +579,37 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 epsilon_decay=cfg.get("rl", {}).get("epsilon_decay", 0.9995),
                 grad_clip=cfg.get("rl", {}).get("grad_clip", 0.5),
                 min_buffer_size=cfg.get("rl", {}).get("min_buffer_size", 256),
-                tau=cfg.get("rl", {}).get("tau", 0.005),  # ✅ Soft update rate
+                tau=cfg.get("rl", {}).get("tau", 0.005),
             )
             
             rl_epochs = cfg.get("rl", {}).get("epochs", 100)
-            
             for ep in range(rl_epochs):
                 state = env.reset()
                 done = False
                 ep_loss = []
-                
                 while not done:
                     action = agent.act(state, explore=True)
                     threshold = agent.threshold(action)
                     next_state, reward, done, info = env.step(threshold)
                     agent.memory.push(state, action, reward, next_state, done)
                     loss = agent.update(batch_size=min(64, len(agent.memory)))
-                    
                     if loss is not None:
                         ep_loss.append(loss)
-                    
                     state = next_state
-                
-                # ✅ KHÔNG cần sync_target() cuối epoch (soft update đã làm liên tục)
-                
                 if (ep + 1) % 10 == 0:
                     avg_loss = np.mean(ep_loss) if ep_loss else 0
                     print(f"  [DQN] Epoch {ep+1}/{rl_epochs}, avg_loss={avg_loss:.4f}")
             
             timing["rl_training_sec"] = time.perf_counter() - start
-            print(f"[TIMING] DQN trained in {timing['rl_training_sec']:.2f}s")
             
-            # ============================================================
-            # ✅ Dùng DQN policy để chọn threshold (GIỐNG PAPER)
-            # ============================================================
-            # 1. Threshold từ RL policy
             policy_thresholds, policy_metrics = apply_dqn_policy(
                 agent, val_scores, val_labels, cfg, graph_embeddings=val_embeddings
             )
-            # ✅ FIX: policy_thresholds là numpy array → lấy mean
-            if isinstance(policy_thresholds, np.ndarray):
-                policy_threshold = float(np.mean(policy_thresholds))
-            else:
-                policy_threshold = float(policy_thresholds)
-            print(f"[DQN] Threshold from RL policy: {policy_threshold:.4f}")
-            
-            # 2. Grid-search để so sánh (log riêng)
+            policy_threshold = float(np.mean(policy_thresholds)) if isinstance(policy_thresholds, np.ndarray) else float(policy_thresholds)
             grid_threshold, grid_metrics = choose_best_threshold_by_validation(
                 val_scores, val_labels, thresholds, cfg=cfg
             )
-            print(f"[DQN] Grid-search threshold: {grid_threshold:.4f} (for comparison only)")
-            print(f"[DQN] Difference: {abs(policy_threshold - grid_threshold):.4f}")
             
-            # ✅ Dùng policy threshold cho benchmark
             best_threshold = policy_threshold
             val_threshold_metrics = {
                 "threshold_selection_method": "dqn_policy",
@@ -707,57 +619,332 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 "grid_auc_roc": grid_metrics.get("auc_roc", 0),
                 "final_loss": np.mean(ep_loss) if ep_loss else 0,
             }
-            
-            print(f"[DQN] Val F1 (policy): {classification_metrics(val_labels, val_scores, threshold=policy_threshold).get('f1', 0):.4f}")
-            print(f"[DQN] Val F1 (grid): {grid_metrics.get('f1', 0):.4f}")
-    
     else:
-        # ❌ Không dùng RL: grid-search
         best_threshold, val_threshold_metrics = choose_best_threshold_by_validation(
             val_scores, val_labels, thresholds, cfg=cfg
         )
         val_threshold_metrics["threshold_selection_method"] = "static_only"
-        print(f"[NO RL] Best threshold from validation: {best_threshold:.4f}")
     
     # ============================================================
-    # 4. ✅ BENCHMARK - ĐÁNH GIÁ TRÊN TEST
+    # 7. EVALUATION
     # ============================================================
-    print(f"\n[TIMING] Evaluating on test set...")
-    start = time.perf_counter()
-    
     val_metrics = classification_metrics(val_labels, val_scores, threshold=best_threshold)
-    test_metrics = classification_metrics(test_labels, test_scores, threshold=best_threshold)
     
-    # ✅ Log so sánh với grid-search threshold
-    if use_rl and agent is not None:
-        grid_threshold = val_threshold_metrics.get("grid_threshold", 0.5)
-        grid_test_metrics = classification_metrics(test_labels, test_scores, threshold=grid_threshold)
-        print(f"\n[COMPARISON] RL policy vs Grid-search on TEST set:")
-        print(f"  RL threshold: {best_threshold:.4f} | Grid threshold: {grid_threshold:.4f}")
-        print(f"  RL F1: {test_metrics.get('f1', 0):.4f} | Grid F1: {grid_test_metrics.get('f1', 0):.4f}")
-        print(f"  RL Recall: {test_metrics.get('recall', 0):.4f} | Grid Recall: {grid_test_metrics.get('recall', 0):.4f}")
-        print(f"  RL AUC-ROC: {test_metrics.get('auc_roc', 0):.4f} | Grid AUC-ROC: {grid_test_metrics.get('auc_roc', 0):.4f}")
+    if test_scores is not None and test_labels is not None:
+        test_metrics = classification_metrics(test_labels, test_scores, threshold=best_threshold)
+    else:
+        test_metrics = {}
     
-    timing["inference_sec"] = time.perf_counter() - start
-    print(f"[TIMING] Evaluation done in {timing['inference_sec']:.2f}s")
+    timing["total_runtime_sec"] = time.perf_counter() - total_start
     
     # ============================================================
-    # 5. ✅ ONLINE ADAPTATION SIMULATION (FIGURE 2)
+    # 8. RESULT
     # ============================================================
-    online_result = None
-    if use_rl and agent is not None and test_embeddings is not None:
-        online_result = simulate_online_adaptation(
-            agent,
-            test_scores,
-            test_labels,
-            test_embeddings,
-            cfg,
-            device=device,
-        )
+    result = {
+        "selected_threshold": best_threshold,
+        "threshold_selection_method": val_threshold_metrics.get("threshold_selection_method", "unknown"),
+        "val_metrics": val_metrics,
+        "test_metrics": test_metrics,
+        "runtime": timing,
+        "val_scores": val_scores.tolist() if isinstance(val_scores, np.ndarray) else val_scores,
+        "val_labels": val_labels.tolist() if isinstance(val_labels, np.ndarray) else val_labels,
+        "federated_history": fed_history,
+    }
+    
+    if test_scores is not None:
+        result["test_scores"] = test_scores.tolist() if isinstance(test_scores, np.ndarray) else test_scores
+        result["test_labels"] = test_labels.tolist() if isinstance(test_labels, np.ndarray) else test_labels
+    
+    if use_rl:
+        result["rl_info"] = {
+            "type": rl_type,
+            "epochs": rl_epochs if use_rl else 0,
+            "threshold_from": "rl_policy",
+        }
+    
+    return result
+
+
+def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Main pipeline - GIỐNG PAPER 100%.
+    Chạy single split (train/val/test).
+    """
+    # Data loading
+    df = load_dataset(cfg)
+    
+    # Split
+    train_df, val_df, test_df = split_dataframe(df, cfg)
+    
+    # Chạy pipeline trên split
+    result = run_pipeline_on_split(train_df, val_df, test_df, cfg)
     
     # ============================================================
-    # 6. ✅ BENCHMARK: PAPER vs REPRODUCTION (GIỐNG PAPER TABLE 2)
+    # BENCHMARK: PAPER vs REPRODUCTION
     # ============================================================
+    _print_benchmark(result, cfg)
+    
+    # Save
+    exp_name = cfg.get("experiment", {}).get("name", "experiment")
+    pipeline_name = cfg.get("experiment", {}).get("pipeline", "fraudgnn_rl")
+    result_filename = f"{exp_name}_{pipeline_name}_metrics.json"
+    save_metrics(result, str(Path("outputs/results") / result_filename))
+    print(f"\n✅ Results saved to: {result_filename}")
+    
+    return result
+
+
+def run_cv_pipeline(
+    cfg: Dict[str, Any],
+    n_folds: int = 5,
+    seeds: List[int] = [42, 123, 2024],
+) -> Dict[str, Any]:
+    """
+    ✅ GIỐNG PAPER: 5-fold Cross-Validation + multiple seeds.
+    
+    Args:
+        cfg: Config dictionary
+        n_folds: Số folds (mặc định 5)
+        seeds: List seeds để chạy mỗi fold
+    
+    Returns:
+        Dict với kết quả tổng hợp
+    """
+    print(f"\n{'='*80}")
+    print(f"🔬 5-FOLD CROSS-VALIDATION (GIỐNG PAPER)")
+    print(f"{'='*80}")
+    print(f"  Folds: {n_folds}")
+    print(f"  Seeds per fold: {seeds}")
+    print(f"  Total runs: {n_folds * len(seeds)}")
+    print(f"{'='*80}\n")
+    
+    df = load_dataset(cfg)
+    
+    # Tạo CV splits
+    from src.data.split import get_cv_splits
+    splits = get_cv_splits(df, cfg, n_folds)
+    
+    all_results = []
+    
+    for fold_idx, (train_idx, val_idx) in enumerate(splits):
+        train_df = df.iloc[train_idx].copy()
+        val_df = df.iloc[val_idx].copy()
+        
+        # ✅ FIX: Xử lý test set rỗng ở fold cuối
+        all_idx = set(range(len(df)))
+        used_idx = set(train_idx) | set(val_idx)
+        test_idx = list(all_idx - used_idx)
+        
+        if len(test_idx) == 0:
+            print(f"[CV] Fold {fold_idx+1}: Test set is empty! Using 20% of val as test.")
+            val_size = len(val_idx)
+            test_from_val = max(1, int(val_size * 0.2))
+            test_idx = val_idx[-test_from_val:]
+            val_idx = val_idx[:-test_from_val]
+            val_df = df.iloc[val_idx].copy()
+        
+        test_df = df.iloc[test_idx].copy()
+        
+        print(f"\n{'='*60}")
+        print(f"[CV] Fold {fold_idx+1}/{n_folds}")
+        print(f"{'='*60}")
+        print(f"  Train: {len(train_df):,} samples")
+        print(f"  Val:   {len(val_df):,} samples")
+        print(f"  Test:  {len(test_df):,} samples")
+        print(f"{'='*60}")
+        
+        for seed in seeds:
+            print(f"\n  🌱 Running with seed: {seed}")
+            
+            # Cập nhật seed
+            cfg['dataset']['random_state'] = seed
+            
+            try:
+                fold_result = run_pipeline_on_split(
+                    train_df=train_df,
+                    val_df=val_df,
+                    test_df=test_df,
+                    cfg=cfg,
+                    fold_idx=fold_idx,
+                )
+                
+                # Lưu kết quả với metadata
+                all_results.append({
+                    'fold': fold_idx + 1,
+                    'seed': seed,
+                    'test_metrics': fold_result.get('test_metrics', {}),
+                    'val_metrics': fold_result.get('val_metrics', {}),
+                    'selected_threshold': fold_result.get('selected_threshold', 0.5),
+                    'threshold_selection_method': fold_result.get('threshold_selection_method', 'unknown'),
+                })
+                
+                print(f"    ✅ F1: {fold_result.get('test_metrics', {}).get('f1', 0):.4f}")
+                print(f"    ✅ Recall: {fold_result.get('test_metrics', {}).get('recall', 0):.4f}")
+                
+            except Exception as e:
+                import traceback
+                print(f"    ❌ Error: {e}")
+                traceback.print_exc()
+                all_results.append({
+                    'fold': fold_idx + 1,
+                    'seed': seed,
+                    'error': str(e),
+                })
+    
+    # ============================================================
+    # TỔNG HỢP KẾT QUẢ
+    # ============================================================
+    print(f"\n{'='*80}")
+    print(f"📊 CV SUMMARY (5-fold × {len(seeds)} seeds)")
+    print(f"{'='*80}")
+    
+    # Lọc kết quả thành công
+    valid_results = [r for r in all_results if 'error' not in r]
+    
+    if not valid_results:
+        print("❌ No valid results!")
+        return {'error': 'No valid results', 'all_results': all_results}
+    
+    # Tính mean ± std cho từng metric
+    metrics = ['auc_roc', 'auc_pr', 'f1', 'recall', 'fpr', 'precision']
+    summary = {
+        'n_folds': n_folds,
+        'n_seeds': len(seeds),
+        'n_total_runs': len(valid_results),
+        'all_results': all_results,
+    }
+    
+    for metric in metrics:
+        values = [r['test_metrics'].get(metric, 0) for r in valid_results]
+        if values:
+            summary[f'{metric}_mean'] = np.mean(values)
+            summary[f'{metric}_std'] = np.std(values)
+            summary[f'{metric}_ci_95'] = 1.96 * np.std(values) / np.sqrt(len(values))
+        else:
+            summary[f'{metric}_mean'] = 0
+            summary[f'{metric}_std'] = 0
+            summary[f'{metric}_ci_95'] = 0
+    
+    # Kết quả threshold
+    thresholds = [r.get('selected_threshold', 0.5) for r in valid_results]
+    summary['threshold_mean'] = np.mean(thresholds)
+    summary['threshold_std'] = np.std(thresholds)
+    
+    # In kết quả
+    print(f"\n📈 Results (mean ± std over {len(valid_results)} runs):")
+    print("-"*60)
+    for metric in metrics:
+        mean = summary.get(f'{metric}_mean', 0)
+        std = summary.get(f'{metric}_std', 0)
+        ci = summary.get(f'{metric}_ci_95', 0)
+        print(f"  {metric:12}: {mean:.4f} ± {std:.4f} (95% CI: {mean-ci:.4f} - {mean+ci:.4f})")
+    
+    print(f"\n  threshold   : {summary['threshold_mean']:.4f} ± {summary['threshold_std']:.4f}")
+    print(f"{'='*80}")
+    
+    # ============================================================
+    # PAPER vs REPRODUCTION (CV)
+    # ============================================================
+    PAPER_METRICS = {
+        'PaySim': {'auc_roc': 0.995, 'auc_pr': 0.647, 'f1': 0.923, 'recall': 0.973},
+        'paysim':  {'auc_roc': 0.995, 'auc_pr': 0.647, 'f1': 0.923, 'recall': 0.973},
+        'creditcard':   {'auc_roc': 0.996, 'auc_pr': 0.652, 'f1': 0.928, 'recall': 0.978},
+        'CreditCard':   {'auc_roc': 0.996, 'auc_pr': 0.652, 'f1': 0.928, 'recall': 0.978},
+        'CreditCard2023': {'auc_roc': 0.996, 'auc_pr': 0.652, 'f1': 0.928, 'recall': 0.978},
+        'ieee':     {'auc_roc': 0.995, 'auc_pr': 0.649, 'f1': 0.925, 'recall': 0.969},
+        'IEEE':     {'auc_roc': 0.995, 'auc_pr': 0.649, 'f1': 0.925, 'recall': 0.969},
+        'IEEE-CIS': {'auc_roc': 0.995, 'auc_pr': 0.649, 'f1': 0.925, 'recall': 0.969},
+    }
+
+    dataset_name = cfg.get('experiment', {}).get('dataset', 'unknown')
+
+    print(f"\n{'='*80}")
+    print(f"[BENCHMARK] PAPER vs REPRODUCTION (CV) - {dataset_name}")
+    print(f"{'='*80}")
+    print(f"📌 Paper: Cui et al., IEEE JOCS 2025 (Table 2)")
+    print(f"📌 Reproduction: Your implementation (5-fold CV + 3 seeds)")
+    print(f"{'='*80}")
+
+    if dataset_name in PAPER_METRICS:
+        paper = PAPER_METRICS[dataset_name]
+        
+        print(f"{'Metric':<15} {'Paper':<20} {'Reproduction':<20} {'Delta':<15}")
+        print("-"*80)
+        
+        metric_names = {
+            'auc_roc': 'AUC-ROC',
+            'auc_pr': 'AUC-PR',
+            'f1': 'F1',
+            'recall': 'Recall@1%'
+        }
+        
+        for metric in ['auc_roc', 'auc_pr', 'f1', 'recall']:
+            paper_val = paper.get(metric, 0)
+            repro_val = summary.get(f'{metric}_mean', 0)
+            repro_std = summary.get(f'{metric}_std', 0)
+            delta = repro_val - paper_val
+            
+            if delta > 0:
+                arrow = "✅"
+            elif delta < 0:
+                arrow = "⚠️"
+            else:
+                arrow = "="
+            
+            display_name = metric_names.get(metric, metric)
+            print(f"{display_name:<15} {paper_val:<20.4f} {repro_val:.4f}±{repro_std:.4f} {arrow}{abs(delta):<14.4f}")
+        
+        print(f"{'='*80}")
+        
+        f1_delta = summary.get('f1_mean', 0) - paper.get('f1', 0)
+        if abs(f1_delta) < 0.01:
+            print("📊 Reproduction F1 matches Paper (within ±0.01) ✅")
+        elif f1_delta > 0:
+            print(f"📊 Reproduction F1 is {f1_delta*100:.1f}% HIGHER than Paper ✅")
+        else:
+            print(f"📊 Reproduction F1 is {abs(f1_delta)*100:.1f}% LOWER than Paper ⚠️")
+        
+        recall_delta = summary.get('recall_mean', 0) - paper.get('recall', 0)
+        if abs(recall_delta) < 0.01:
+            print("📊 Reproduction Recall@1% matches Paper (within ±1%) ✅")
+        elif recall_delta > 0:
+            print(f"📊 Reproduction Recall@1% is {recall_delta*100:.1f}% HIGHER than Paper ✅")
+        else:
+            print(f"📊 Reproduction Recall@1% is {abs(recall_delta)*100:.1f}% LOWER than Paper ⚠️")
+        
+    else:
+        print(f"⚠️ Dataset '{dataset_name}' not found in PAPER_METRICS")
+    
+    # ============================================================
+    # LƯU KẾT QUẢ
+    # ============================================================
+    exp_name = cfg.get("experiment", {}).get("name", "experiment")
+    result_filename = f"{exp_name}_cv_results.json"
+    
+    # Convert numpy types
+    def convert_to_serializable(obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (np.float32, np.float64)):
+            return float(obj)
+        if isinstance(obj, (np.int32, np.int64)):
+            return int(obj)
+        if isinstance(obj, dict):
+            return {k: convert_to_serializable(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [convert_to_serializable(item) for item in obj]
+        return obj
+    
+    serializable_summary = convert_to_serializable(summary)
+    
+    save_metrics(serializable_summary, str(Path("outputs/results") / result_filename))
+    print(f"\n✅ CV results saved to: {result_filename}")
+    
+    return summary
+
+
+def _print_benchmark(result: Dict[str, Any], cfg: Dict[str, Any]):
+    """In benchmark PAPER vs REPRODUCTION cho single run."""
     PAPER_METRICS = {
         'PaySim': {'auc_roc': 0.995, 'auc_pr': 0.647, 'f1': 0.923, 'recall': 0.973},
         'paysim':  {'auc_roc': 0.995, 'auc_pr': 0.647, 'f1': 0.923, 'recall': 0.973},
@@ -780,35 +967,22 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     if dataset_name in PAPER_METRICS:
         paper = PAPER_METRICS[dataset_name]
-        repro = test_metrics
+        repro = result.get('test_metrics', {})
         
         print(f"{'Metric':<15} {'Paper':<20} {'Reproduction':<20} {'Delta':<15}")
         print("-"*80)
-        
-        metric_names = {
-            'auc_roc': 'AUC-ROC',
-            'auc_pr': 'AUC-PR',
-            'f1': 'F1',
-            'recall': 'Recall@1%'
-        }
         
         for metric in ['auc_roc', 'auc_pr', 'f1', 'recall']:
             paper_val = paper.get(metric, 0)
             repro_val = repro.get(metric, 0)
             delta = repro_val - paper_val
             
-            if delta > 0:
-                arrow = "✅"
-            elif delta < 0:
-                arrow = "⚠️"
-            else:
-                arrow = "="
-            
-            display_name = metric_names.get(metric, metric)
+            arrow = "✅" if delta > 0 else ("⚠️" if delta < 0 else "=")
+            display_name = {'auc_roc': 'AUC-ROC', 'auc_pr': 'AUC-PR', 'f1': 'F1', 'recall': 'Recall@1%'}[metric]
             print(f"{display_name:<15} {paper_val:<20.4f} {repro_val:<20.4f} {arrow}{abs(delta):<14.4f}")
         
         print(f"{'='*80}")
-        print(f"Selected threshold: {best_threshold:.4f} (from RL policy)")
+        print(f"Selected threshold: {result.get('selected_threshold', 0.5):.4f} (from RL policy)")
         
         f1_delta = repro.get('f1', 0) - paper.get('f1', 0)
         if abs(f1_delta) < 0.01:
@@ -818,99 +992,5 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
         else:
             print(f"📊 Reproduction F1 is {abs(f1_delta)*100:.1f}% LOWER than Paper ⚠️")
         
-        recall_delta = repro.get('recall', 0) - paper.get('recall', 0)
-        if abs(recall_delta) < 0.01:
-            print("📊 Reproduction Recall@1% matches Paper (within ±1%) ✅")
-        elif recall_delta > 0:
-            print(f"📊 Reproduction Recall@1% is {recall_delta*100:.1f}% HIGHER than Paper ✅")
-        else:
-            print(f"📊 Reproduction Recall@1% is {abs(recall_delta)*100:.1f}% LOWER than Paper ⚠️")
-        
     else:
         print(f"⚠️ Dataset '{dataset_name}' not found in PAPER_METRICS")
-        print("Available: PaySim, paysim, creditcard, CreditCard, CreditCard2023, ieee, IEEE, IEEE-CIS")
-    
-    # ============================================================
-    # 7. LATENCY & MEMORY
-    # ============================================================
-    print(f"\n[TIMING] Measuring latency and memory...")
-    latency_metrics = {}
-    memory_metrics = {}
-    
-    try:
-        from torch_geometric.loader import NeighborLoader
-        test_loader = NeighborLoader(
-            test_graph,
-            num_neighbors=[15, 10],
-            batch_size=64,
-            shuffle=False,
-            drop_last=False,
-            num_workers=0,
-        )
-        test_batch = next(iter(test_loader))
-        
-        latency_metrics = measure_latency(global_model, test_batch, device=device, num_runs=20)
-        memory_metrics = get_memory_usage()
-        
-        print(f"[TIMING] Latency: {latency_metrics.get('latency_mean_ms', 0):.2f}ms")
-        print(f"[TIMING] Throughput: {latency_metrics.get('throughput_per_sec', 0):.0f} samples/s")
-        print(f"[TIMING] RAM: {memory_metrics.get('ram_used_gb', 0):.2f}GB")
-    except Exception as e:
-        print(f"⚠️ Latency/memory measurement failed: {e}")
-    
-    # ============================================================
-    # 8. TOTAL RUNTIME
-    # ============================================================
-    timing["total_runtime_sec"] = time.perf_counter() - total_start
-    num_samples = len(df)
-    timing["runtime_per_sample_sec"] = timing["total_runtime_sec"] / max(1, num_samples)
-    timing["throughput_samples_per_sec"] = num_samples / max(1, timing["total_runtime_sec"])
-    
-    print(f"\n[TIMING] ===== SUMMARY =====")
-    print(f"[TIMING] Total runtime: {timing['total_runtime_sec']:.2f}s")
-    print(f"[TIMING] Throughput: {timing['throughput_samples_per_sec']:.2f} samples/s")
-    print_timing_summary(timing)
-    
-    # ============================================================
-    # 9. RESULT
-    # ============================================================
-    pipeline = cfg.get("experiment", {}).get("pipeline", "fraudgnn_rl")
-    model_name = "FraudGNN-RL" if pipeline == "fraudgnn_rl" else "FraudGNN-RL+"
-    
-    result = {
-        "model": model_name,
-        "pipeline": pipeline,
-        "flags": flags,
-        "selected_threshold": best_threshold,
-        "threshold_selection_method": val_threshold_metrics.get("threshold_selection_method", "unknown"),
-        "val_metrics": val_metrics,
-        "test_metrics": test_metrics,
-        "runtime": timing,
-        "num_samples": num_samples,
-        "latency": latency_metrics,
-        "memory": memory_metrics,
-        "federated_history": fed_history,
-        "notes": "Benchmark: RL only on validation, test uses fixed threshold from RL policy (giống paper Table 2)",
-        "online_adaptation": online_result,
-        "entity_type_used": entity_type_full is not None,
-        "threshold_comparison": {
-            "policy_threshold": val_threshold_metrics.get("policy_threshold", best_threshold),
-            "grid_threshold": val_threshold_metrics.get("grid_threshold", None),
-        } if use_rl and agent is not None else None,
-    }
-    
-    if use_rl:
-        result["rl_info"] = {
-            "type": rl_type,
-            "epochs": rl_epochs if use_rl else 0,
-            "threshold_from": "rl_policy",
-        }
-    
-    exp_name = cfg.get("experiment", {}).get("name", "experiment")
-    pipeline_name = cfg.get("experiment", {}).get("pipeline", "fraudgnn_rl")
-    result_filename = f"{exp_name}_{pipeline_name}_metrics.json"
-    save_metrics(result, str(Path("outputs/results") / result_filename))
-    
-    print(f"\n✅ Results saved to: {result_filename}")
-    
-    return result

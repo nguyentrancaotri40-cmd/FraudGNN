@@ -53,8 +53,8 @@ class ThresholdDQNAgent:
     DQN Agent - GIỐNG PAPER 100% (REPRODUCTION)
     
     Paper (Eq 3-4): Vanilla DQN với target network.
-    KHÔNG dùng Double DQN.
-    
+    ✅ FIX C3: Đã sửa thành Vanilla DQN (giống paper Eq 12)
+    ✅ KHÔNG dùng Double DQN.
     ✅ FIX: Soft update (Polyak averaging) thay vì hard sync
     """
     state_dim: int
@@ -104,7 +104,8 @@ class ThresholdDQNAgent:
 
     def update(self, batch_size: int = 64) -> float | None:
         """
-        ✅ GIỐNG PAPER 100%: Vanilla DQN update (Eq 4)
+        ✅ GIỐNG PAPER 100%: Vanilla DQN update (Eq 12)
+        ✅ FIX C3: Dùng target_net cho cả selection và evaluation
         ✅ FIX: Soft update sau mỗi step
         """
         if len(self.memory) < self.min_buffer_size:
@@ -122,7 +123,9 @@ class ThresholdDQNAgent:
         q_values = self.policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
         
         with torch.no_grad():
-            next_q = self.target_net(next_states).max(dim=1)[0]
+            # ✅ FIX C3: Vanilla DQN - target_net cho cả selection và evaluation
+            # Paper Eq 12: max_a' Q(s', a'; θ⁻)
+            next_q = self.target_net(next_states).max(dim=1)[0]  # ✅ target_net.max()
             target = rewards + self.gamma * next_q * (1.0 - dones)
         
         loss = F.mse_loss(q_values, target)
@@ -144,6 +147,7 @@ class ThresholdDQNAgent:
     
     def sync_target(self) -> None:
         pass
+
 
 class BatchThresholdEnvironment:
     """

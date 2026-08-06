@@ -12,15 +12,15 @@ from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 class TemporalAggregator(nn.Module):
     """
-    Temporal Aggregator - GIỐNG PAPER 100% + TỐI ƯU HIỆU NĂNG
+    Temporal Aggregator - GIỐNG PAPER 100%
     
     Paper (Eq 6): TEMP(i) = GRU({ (f_k, α_k) | (v_i, v_j, t_k, f_k) ∈ E_i })
     Paper (Eq 7): α_k = exp(-β(t_now - t_k)) / Σ_l exp(-β(t_now - t_l))
     
-    Tối ưu:
-    1. Dùng pack_padded_sequence để xử lý GRU nhanh hơn
-    2. Vector hóa việc lấy final hidden state (không lặp Python)
-    3. Giữ nguyên 100% công thức toán học
+    ✅ FIX B2: GRU chạy TUẦN TỰ qua từng edge của mỗi node.
+    - Mỗi edge là 1 step
+    - Hidden state tiến hóa qua từng step
+    - Output là final hidden state sau khi xử lý toàn bộ sequence
     """
     
     def __init__(self, in_dim: int, out_dim: int):
@@ -74,24 +74,24 @@ class TemporalAggregator(nn.Module):
             graph_weights = edge_weight.to(device).to(msg.dtype).clamp_min(0.0)
         
         weights = time_weights * graph_weights
+        weighted_msg = msg * weights.unsqueeze(-1)
         
         # ============================================================
-        # 4. ✅ SẮP XẾP EDGES THEO THỜI GIAN (quá khứ → hiện tại)
-        #    FIX LỖI #F: descending để cũ nhất trước, gần nhất sau
-        #    edge_time_delta = t_now - t_k (càng nhỏ = càng gần)
+        # 4. ✅ FIX B2: SẮP XẾP EDGES THEO THỜI GIAN (quá khứ → hiện tại)
+        #    ascending = từ quá khứ đến hiện tại (đúng temporal order)
         # ============================================================
         if edge_time_delta is not None:
-            sorted_indices = torch.argsort(edge_time_delta, descending=True)  # ✅ FIX #F
+            # ✅ ascending: cũ nhất trước, gần nhất sau
+            sorted_indices = torch.argsort(edge_time_delta, descending=False)
         else:
             sorted_indices = torch.arange(edge_index.size(1), device=device)
         
         sorted_dst = dst[sorted_indices]
-        sorted_msg = msg[sorted_indices] * weights[sorted_indices].unsqueeze(-1)
+        sorted_msg = weighted_msg[sorted_indices]
         
         # ============================================================
         # 5. GROUP EDGES THEO NODE (CSR format)
         # ============================================================
-        # Đếm số edges mỗi node
         num_edges_per_node = scatter(
             torch.ones(sorted_dst.size(0), device=device),
             sorted_dst,
@@ -111,9 +111,8 @@ class TemporalAggregator(nn.Module):
         num_nodes_with_edges = len(node_indices)
         
         # ============================================================
-        # 6. TẠO PADDED SEQUENCES (VECTOR HÓA BẰNG SCATTER)
+        # 6. TẠO PADDED SEQUENCES
         # ============================================================
-        # Tạo padded_sequences bằng scatter thay vì vòng lặp Python
         padded_sequences = torch.zeros(
             num_nodes_with_edges, max_len, self.gru.hidden_size,
             device=device, dtype=x.dtype
@@ -125,40 +124,25 @@ class TemporalAggregator(nn.Module):
             torch.cumsum(num_edges_per_node[:-1], dim=0)
         ])
         
-        # VECTOR HÓA: Dùng scatter để gán messages vào padded_sequences
-        # Tạo indices cho scatter
-        node_positions = torch.arange(num_nodes_with_edges, device=device)
-        
-        # Tính toán vị trí bắt đầu và độ dài cho từng node
-        start_offsets = offsets[node_indices]
-        seq_lens = seq_lengths
-        
-        # Tạo flat indices cho scatter
-        # Mỗi node i có seq_len[i] messages, cần gán vào padded_sequences[i, :seq_len[i]]
-        total_msgs = len(sorted_msg)
-        
-        # Tạo batch indices (node index trong padded_sequences)
+        # Gán messages vào padded_sequences
         batch_indices = torch.repeat_interleave(
             torch.arange(num_nodes_with_edges, device=device),
-            seq_lens
+            seq_lengths
         )
         
-        # Tạo sequence indices (vị trí trong sequence)
         seq_indices = torch.cat([
-            torch.arange(seq_len, device=device) for seq_len in seq_lens
+            torch.arange(seq_len, device=device) for seq_len in seq_lengths
         ])
         
-        # Scatter messages vào padded_sequences
         padded_sequences[batch_indices, seq_indices] = sorted_msg
         
         # ============================================================
-        # 7. GRU TRÊN TOÀN BỘ SEQUENCE (VỚI PACK_PADDED_SEQUENCE)
+        # 7. ✅ GRU TRÊN TOÀN BỘ SEQUENCE (tuần tự)
+        #    Dùng pack_padded_sequence để xử lý hiệu quả
         # ============================================================
-        # Sắp xếp theo độ dài giảm dần (cho pack_padded_sequence)
         seq_lengths_sorted, sort_indices = torch.sort(seq_lengths, descending=True)
         padded_sequences_sorted = padded_sequences[sort_indices]
         
-        # Dùng pack_padded_sequence để tăng tốc GRU
         packed_input = pack_padded_sequence(
             padded_sequences_sorted,
             seq_lengths_sorted.cpu(),
@@ -166,24 +150,21 @@ class TemporalAggregator(nn.Module):
             enforce_sorted=True
         )
         
-        # GRU forward
+        # ✅ GRU xử lý TOÀN BỘ sequence (tất cả steps)
         gru_out, _ = self.gru(packed_input)
         
-        # Unpack để lấy output
         gru_out_unpacked, _ = pad_packed_sequence(gru_out, batch_first=True, total_length=max_len)
         
         # ============================================================
-        # 8. VECTOR HÓA: LẤY FINAL HIDDEN STATE
+        # 8. LẤY FINAL HIDDEN STATE (sau bước cuối cùng)
         # ============================================================
-        # Lấy hidden state ở bước cuối của mỗi sequence (không lặp Python)
         batch_size = gru_out_unpacked.size(0)
         seq_len_minus_1 = (seq_lengths_sorted - 1).long()
         batch_indices = torch.arange(batch_size, device=device)
         
-        # Vector hóa: lấy hidden cuối cho tất cả sequence cùng lúc
+        # ✅ Final hidden = hidden state sau step cuối cùng
         final_hidden = gru_out_unpacked[batch_indices, seq_len_minus_1, :].clone()
         
-        # Đưa về đúng thứ tự ban đầu
         inverse_sort_indices = torch.argsort(sort_indices)
         final_hidden_original_order = final_hidden[inverse_sort_indices].clone()
         

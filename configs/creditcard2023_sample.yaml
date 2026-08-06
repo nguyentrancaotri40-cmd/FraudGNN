@@ -6,7 +6,7 @@ flags:
   federated: true
   rl: true
   pruning: false
-  dqn: true
+  dqn: false
 
 experiment:
   name: creditcard_sample_10pct
@@ -53,6 +53,7 @@ train:
   weight_decay: 0.0001
 
 rl:
+  type: naf    
   enabled: true
   threshold_bins:
     - 0.05

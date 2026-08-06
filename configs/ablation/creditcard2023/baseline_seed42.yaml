@@ -29,6 +29,7 @@ flags:
   pruning: false
   soft_edges: false
   weighted_fusion: false
+  dqn: false
 
 graph:
   add_self_loops: true
@@ -50,6 +51,7 @@ preprocess:
   numeric_strategy: median
 
 rl:
+  type: naf  
   batch_size: 256
   enabled: true
   epochs: 30

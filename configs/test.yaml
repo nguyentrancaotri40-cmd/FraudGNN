@@ -1,5 +1,5 @@
 # ============================================================
-# CONFIG: TEST DQN - SOFT UPDATE (GIỐNG PAPER)
+# CONFIG: TEST NAF - SOFT UPDATE (GIỐNG PAPER)
 # ============================================================
 # ✅ Giống paper 100% về methodology:
 #   - Temporal split (80-10-10) cho PaySim
@@ -10,7 +10,7 @@
 #   - Stratified random sampling
 #   - Federated Learning (bật)
 #   - Entity graph: node = user (giữ nameOrig/nameDest)
-#   - DQN: 100 epochs để kiểm tra loss trend
+#   - NAF: continuous action (threshold + feature weights)
 #   - ✅ FIX: Soft update (tau) thay vì hard sync
 #
 # ⚠️ Chỉ khác paper để test nhanh:
@@ -29,10 +29,10 @@ flags:
   federated: true             
   rl: true
   pruning: false
-  dqn: true
+  dqn: false
 
 experiment:
-  name: test_dqn_soft
+  name: test_naf_soft
   pipeline: fraudgnn_rl
   dataset: paysim
 
@@ -53,9 +53,6 @@ split:
 
 preprocess:
   drop_cols:
-    # ✅ GIỮ nameOrig và nameDest (entity graph)
-    # - nameOrig
-    # - nameDest
     - isFlaggedFraud
   categorical_cols:
     - type
@@ -82,20 +79,21 @@ train:
   weight_decay: 0.0001
 
 # ============================================================
-# ✅ DQN CONFIG - SOFT UPDATE
+# ✅ NAF CONFIG - SOFT UPDATE (continuous action)
 # ============================================================
 rl:
+  type: naf    
   enabled: true
   threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
   fpr_penalty: 0.5
   epochs: 100
   batch_size: 256
-  learning_rate: 0.000001       # ✅ Giảm thêm
-  buffer_size: 200000           # ✅ Tăng buffer
+  learning_rate: 0.000001
+  buffer_size: 200000
   epsilon_start: 1.0
   epsilon_end: 0.01
-  epsilon_decay: 0.9999         # ✅ Giảm chậm hơn
-  tau: 0.005                    # ✅ Soft update rate (Polyak averaging)
+  epsilon_decay: 0.9999
+  tau: 0.005
   grad_clip: 0.5
   min_buffer_size: 512
 
