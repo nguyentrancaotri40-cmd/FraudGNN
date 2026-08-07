@@ -363,12 +363,20 @@ Do tác giả chưa public source code, một số chi tiết phải diễn gi�
 
 | Key | Mặc định | Mô tả |
 |-----|----------|-------|
-| rl.type | dqn | dqn hoặc naf |
+| rl.type | **naf** | dqn hoặc naf (mặc định NAF có feature weights) |
 | rl.threshold_bins | [0.05, ...] | Discrete bins cho DQN |
 | rl.epochs | 30-100 | Số epochs train RL |
-| rl.tau | 0.005 | Soft update rate ✅ |
+| rl.tau | 0.005 | Soft update rate (Polyak averaging) ✅ |
 
 ---
+
+## Cross-Validation (GIỐNG PAPER)
+
+Chạy 5-fold Cross-Validation với 3 seeds để đánh giá robust:
+
+```bash
+python -c "from src.train.pipeline_fraudgnn import run_cv_pipeline; from src.utils.config import load_config; cfg = load_config('configs/test.yaml'); run_cv_pipeline(cfg)"
+```
 
 # Tham khảo
 

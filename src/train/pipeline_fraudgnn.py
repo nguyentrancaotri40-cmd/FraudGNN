@@ -15,6 +15,7 @@
 #   - ✅ FIX: Hỗ trợ tau (soft update rate) cho DQN
 #   - ✅ FIX: Mặc định dùng NAF (có feature weights) thay vì DQN
 #   - ✅ FIX: 5-fold Cross-Validation (giống paper)
+#   - ✅ FIX: Xử lý policy_threshold từ apply_naf_policy() an toàn
 # ============================================================
 
 from __future__ import annotations
@@ -541,13 +542,36 @@ def run_pipeline_on_split(
             if test_graph is not None:
                 test_embeddings = global_model.embeddings(test_graph).cpu().numpy()
             
-            policy_threshold, policy_metrics = apply_naf_policy(
+            # ============================================================
+            # ✅ FIX: Xử lý policy_threshold từ apply_naf_policy() an toàn
+            # ============================================================
+            policy_result = apply_naf_policy(
                 agent, val_scores, val_labels, cfg, graph_embeddings=val_embeddings
             )
+            
+            # ✅ Xử lý kết quả trả về (phòng thủ)
+            if isinstance(policy_result, tuple):
+                policy_threshold, policy_metrics = policy_result
+            else:
+                policy_threshold = float(policy_result)
+                policy_metrics = {}
+            
+            # ✅ Đảm bảo policy_threshold là float
+            if isinstance(policy_threshold, (tuple, list)):
+                policy_threshold = float(policy_threshold[0])
+            else:
+                policy_threshold = float(policy_threshold)
+                
+            print(f"[NAF] Threshold from RL policy: {policy_threshold:.4f}")
+            
+            # 2. Grid-search để so sánh (log riêng)
             grid_threshold, grid_metrics = choose_best_threshold_by_validation(
                 val_scores, val_labels, thresholds, cfg=cfg
             )
+            print(f"[NAF] Grid-search threshold: {grid_threshold:.4f} (for comparison only)")
+            print(f"[NAF] Difference: {abs(policy_threshold - grid_threshold):.4f}")
             
+            # ✅ Dùng policy threshold cho benchmark
             best_threshold = policy_threshold
             val_threshold_metrics = {
                 "threshold_selection_method": "naf_policy",
@@ -558,6 +582,10 @@ def run_pipeline_on_split(
                 "feature_weights_applied": True,
                 "feature_weights_sum": float(feature_weights.sum()),
             }
+            
+            print(f"[NAF] Val F1 (policy): {classification_metrics(val_labels, val_scores, threshold=policy_threshold).get('f1', 0):.4f}")
+            print(f"[NAF] Val F1 (grid): {grid_metrics.get('f1', 0):.4f}")
+        
         else:
             from src.models.dqn_agent import ThresholdDQNAgent, BatchThresholdEnvironment
             start = time.perf_counter()

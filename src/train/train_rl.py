@@ -104,7 +104,7 @@ def apply_dqn_policy(
 
 
 # ============================================================
-# ✅ THÊM: apply_naf_policy
+# ✅ FIX: apply_naf_policy - Đảm bảo threshold là float
 # ============================================================
 def apply_naf_policy(
     agent,
@@ -112,8 +112,12 @@ def apply_naf_policy(
     labels: np.ndarray,
     cfg: Dict[str, Any],
     graph_embeddings: np.ndarray | None = None,
-) -> tuple[np.ndarray, float]:
-    """Apply trained NAF agent greedily to select thresholds."""
+) -> tuple[float, dict]:
+    """
+    Apply trained NAF agent greedily to select thresholds.
+    
+    ✅ FIX: Đảm bảo threshold trả về là float, không phải tuple
+    """
     import numpy as np
     
     rl_cfg = cfg.get("rl", {})
@@ -134,17 +138,38 @@ def apply_naf_policy(
     state = env.reset()
     done = False
     thresholds = []
+    all_info = []
     
     while not done:
         # ✅ Greedy: explore=False
-        threshold = agent.act(state, explore=False)
+        # ✅ FIX: Lấy threshold từ action_vector - đảm bảo là float
+        action_vector, threshold, feature_weights = agent.act(state, explore=False)
+        
+        # ✅ Đảm bảo threshold là float
+        if isinstance(threshold, (tuple, list)):
+            threshold = float(threshold[0])
+        else:
+            threshold = float(threshold)
+        
         thresholds.append(threshold)
-        state, _reward, done, _info = env.step(threshold)
+        
+        state, reward, done, info = env.step(threshold)
+        all_info.append(info)
     
-    thresholds = np.array(thresholds)
-    mean_threshold = float(np.mean(thresholds))
+    # ✅ Đảm bảo threshold là float
+    if thresholds:
+        mean_threshold = float(np.mean(thresholds))
+    else:
+        mean_threshold = 0.5
     
-    return thresholds, mean_threshold
+    metrics = {
+        'thresholds': thresholds,
+        'mean': mean_threshold,
+        'num_steps': len(thresholds),
+        'info': all_info,
+    }
+    
+    return mean_threshold, metrics
 
 
 def choose_best_threshold_by_validation(
