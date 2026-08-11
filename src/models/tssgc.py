@@ -21,6 +21,7 @@ class TemporalAggregator(nn.Module):
     - Mỗi edge là 1 step
     - Hidden state tiến hóa qua từng step
     - Output là final hidden state sau khi xử lý toàn bộ sequence
+    ✅ FIX: Xử lý seq_len = 0 để tránh lỗi khi batch chỉ có 1 class
     """
     
     def __init__(self, in_dim: int, out_dim: int):
@@ -107,40 +108,61 @@ class TemporalAggregator(nn.Module):
         if len(node_indices) == 0:
             return torch.zeros(num_nodes, self.gru.hidden_size, device=device, dtype=x.dtype)
         
-        max_len = seq_lengths.max().item()
-        num_nodes_with_edges = len(node_indices)
+        # ============================================================
+        # ✅ FIX: Lọc các node có seq_length > 0
+        # ============================================================
+        valid_mask = seq_lengths > 0
+        if not valid_mask.any():
+            return torch.zeros(num_nodes, self.gru.hidden_size, device=device, dtype=x.dtype)
+        
+        valid_node_indices = node_indices[valid_mask]
+        valid_seq_lengths = seq_lengths[valid_mask]
+        
+        max_len = valid_seq_lengths.max().item()
+        num_nodes_with_edges = len(valid_node_indices)
         
         # ============================================================
-        # 6. TẠO PADDED SEQUENCES
+        # 6. TẠO PADDED SEQUENCES (CHỈ CHO VALID NODES)
         # ============================================================
         padded_sequences = torch.zeros(
             num_nodes_with_edges, max_len, self.gru.hidden_size,
             device=device, dtype=x.dtype
         )
         
-        # Tạo offsets (CSR format)
+        # Tạo offsets (CSR format) cho valid nodes
+        # Cần lấy num_edges_per_node cho tất cả nodes, nhưng chỉ dùng valid
         offsets = torch.cat([
             torch.tensor([0], device=device),
             torch.cumsum(num_edges_per_node[:-1], dim=0)
         ])
         
+        # Lấy offsets cho valid nodes
+        valid_offsets = offsets[valid_node_indices]
+        
         # Gán messages vào padded_sequences
         batch_indices = torch.repeat_interleave(
             torch.arange(num_nodes_with_edges, device=device),
-            seq_lengths
+            valid_seq_lengths
         )
         
+        # Tạo seq_indices cho valid_seq_lengths
         seq_indices = torch.cat([
-            torch.arange(seq_len, device=device) for seq_len in seq_lengths
+            torch.arange(seq_len, device=device) for seq_len in valid_seq_lengths
         ])
         
-        padded_sequences[batch_indices, seq_indices] = sorted_msg
+        # Lấy messages cho valid nodes (cần slice theo offset)
+        # Tạo indices để lấy messages từ sorted_msg
+        msg_indices = torch.cat([
+            torch.arange(valid_offsets[i], valid_offsets[i] + valid_seq_lengths[i], device=device)
+            for i in range(num_nodes_with_edges)
+        ])
+        
+        padded_sequences[batch_indices, seq_indices] = sorted_msg[msg_indices]
         
         # ============================================================
         # 7. ✅ GRU TRÊN TOÀN BỘ SEQUENCE (tuần tự)
-        #    Dùng pack_padded_sequence để xử lý hiệu quả
         # ============================================================
-        seq_lengths_sorted, sort_indices = torch.sort(seq_lengths, descending=True)
+        seq_lengths_sorted, sort_indices = torch.sort(valid_seq_lengths, descending=True)
         padded_sequences_sorted = padded_sequences[sort_indices]
         
         packed_input = pack_padded_sequence(
@@ -172,7 +194,7 @@ class TemporalAggregator(nn.Module):
         # 9. GÁN VÀO TENSOR KẾT QUẢ
         # ============================================================
         h = torch.zeros(num_nodes, self.gru.hidden_size, device=device, dtype=x.dtype)
-        h[node_indices] = final_hidden_original_order.clone()
+        h[valid_node_indices] = final_hidden_original_order.clone()
         
         return h
 
