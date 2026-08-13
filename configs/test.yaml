@@ -99,7 +99,7 @@ rl:
 
 federated:
   num_clients: 3
-  rounds: 1
+  rounds: 5
   local_epochs: 1
   learning_rate: 0.001
   batch_size: 64
