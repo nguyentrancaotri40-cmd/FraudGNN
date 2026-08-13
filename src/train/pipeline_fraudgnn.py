@@ -16,6 +16,7 @@
 #   - ✅ FIX: Mặc định dùng NAF (có feature weights) thay vì DQN
 #   - ✅ FIX: 5-fold Cross-Validation (giống paper)
 #   - ✅ FIX: Xử lý policy_threshold từ apply_naf_policy() an toàn
+#   - ✅ FIX: Log memory usage tại các stage quan trọng
 # ============================================================
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ from src.eval.evaluate import predict_scores, save_metrics
 from src.eval.metrics import classification_metrics
 from src.utils.seed import set_seed
 from src.utils.config import ensure_dirs
-from src.utils.timer import measure_latency, get_memory_usage, print_timing_summary
+from src.utils.timer import measure_latency, get_memory_usage, print_timing_summary, log_memory_snapshot
 
 
 def resolve_flags(cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -406,6 +407,9 @@ def run_pipeline_on_split(
     fold_str = f"Fold {fold_idx+1}/" if fold_idx is not None else ""
     print(f"[TIMING] {fold_str}Pipeline started at: {total_start}")
     
+    # ✅ LOG MEMORY: After pipeline start
+    log_memory_snapshot("After pipeline start")
+    
     # ============================================================
     # 2. ENTITY TYPE
     # ============================================================
@@ -456,6 +460,9 @@ def run_pipeline_on_split(
         test_graph = None
     timing["graph_building_sec"] = time.perf_counter() - start
     
+    # ✅ LOG MEMORY: After graph building
+    log_memory_snapshot("After graph building")
+    
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # ============================================================
@@ -505,6 +512,9 @@ def run_pipeline_on_split(
             test_scores, test_labels = predict_scores(global_model, test_graph, device=device)
         else:
             test_scores, test_labels = None, None
+    
+    # ✅ LOG MEMORY: After FL training
+    log_memory_snapshot("After FL training")
     
     # ============================================================
     # 6. RL THRESHOLD
@@ -653,6 +663,9 @@ def run_pipeline_on_split(
         )
         val_threshold_metrics["threshold_selection_method"] = "static_only"
     
+    # ✅ LOG MEMORY: After RL training
+    log_memory_snapshot("After RL training")
+    
     # ============================================================
     # 7. EVALUATION
     # ============================================================
@@ -664,6 +677,9 @@ def run_pipeline_on_split(
         test_metrics = {}
     
     timing["total_runtime_sec"] = time.perf_counter() - total_start
+    
+    # ✅ LOG MEMORY: After evaluation
+    log_memory_snapshot("After evaluation")
     
     # ============================================================
     # 8. RESULT
@@ -718,6 +734,9 @@ def run_pipeline(cfg: Dict[str, Any]) -> Dict[str, Any]:
     result_filename = f"{exp_name}_{pipeline_name}_metrics.json"
     save_metrics(result, str(Path("outputs/results") / result_filename))
     print(f"\n✅ Results saved to: {result_filename}")
+    
+    # ✅ LOG MEMORY: After pipeline complete
+    log_memory_snapshot("After pipeline complete")
     
     return result
 

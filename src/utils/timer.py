@@ -26,7 +26,8 @@ def timer(func: Callable) -> Callable:
 
 
 def measure_latency(model, data, device: str = "cpu", num_runs: int = 100) -> Dict[str, float]:
-    """Đo latency (thời gian inference) của model.
+    """
+    Đo latency (thời gian inference) của model.
     
     Args:
         model: PyTorch model
@@ -81,8 +82,12 @@ def measure_latency(model, data, device: str = "cpu", num_runs: int = 100) -> Di
     }
 
 
-def get_memory_usage(alert_threshold: float = 0.85) -> Dict[str, float]:
-    """Lấy thông tin memory usage và cảnh báo nếu gần OOM."""
+def get_memory_usage(alert_threshold: float = 0.85, log_memory: bool = True) -> Dict[str, float]:
+    """
+    Lấy thông tin memory usage và cảnh báo nếu gần OOM.
+    
+    ✅ TÍCH HỢP VÀO PIPELINE: Tự động log memory trong quá trình chạy
+    """
     mem = psutil.virtual_memory()
     
     result = {
@@ -92,7 +97,11 @@ def get_memory_usage(alert_threshold: float = 0.85) -> Dict[str, float]:
         "ram_usage_percent": mem.percent,
     }
     
-    # ✅ Cảnh báo nếu memory quá cao
+    # ✅ Log RAM
+    if log_memory:
+        print(f"[MEMORY] RAM: {result['ram_used_gb']:.2f}GB / {result['ram_total_gb']:.2f}GB ({result['ram_usage_percent']:.1f}%)")
+    
+    # ✅ Cảnh báo nếu RAM quá cao
     if mem.percent > alert_threshold * 100:
         warnings.warn(
             f"⚠️ High memory usage: {mem.percent:.1f}% "
@@ -100,20 +109,53 @@ def get_memory_usage(alert_threshold: float = 0.85) -> Dict[str, float]:
             ResourceWarning
         )
     
+    # ✅ Check VRAM (GPU)
     if torch.cuda.is_available():
+        result["vram_total_gb"] = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         result["vram_allocated_gb"] = torch.cuda.memory_allocated() / (1024**3)
         result["vram_reserved_gb"] = torch.cuda.memory_reserved() / (1024**3)
         result["vram_max_allocated_gb"] = torch.cuda.max_memory_allocated() / (1024**3)
+        result["vram_usage_percent"] = (result["vram_allocated_gb"] / result["vram_total_gb"]) * 100
+        
+        # ✅ Log VRAM
+        if log_memory:
+            print(f"[MEMORY] VRAM: {result['vram_allocated_gb']:.2f}GB / {result['vram_total_gb']:.2f}GB ({result['vram_usage_percent']:.1f}%)")
         
         # ✅ Cảnh báo nếu VRAM cao
-        vram_percent = result["vram_allocated_gb"] / result.get("vram_total_gb", 1)
-        if vram_percent > 0.85:
+        if result['vram_usage_percent'] > alert_threshold * 100:
             warnings.warn(
-                f"⚠️ High GPU memory: {result['vram_allocated_gb']:.2f}GB",
+                f"⚠️ High GPU memory: {result['vram_allocated_gb']:.2f}GB / {result['vram_total_gb']:.2f}GB ({result['vram_usage_percent']:.1f}%)",
                 ResourceWarning
             )
     
     return result
+
+
+def log_memory_snapshot(stage: str = "") -> Dict[str, float]:
+    """
+    ✅ Ghi snapshot memory tại một thời điểm trong pipeline.
+    Dùng để debug memory leak.
+    
+    Args:
+        stage: Tên giai đoạn (ví dụ: "before_graph", "after_graph", "before_fl", ...)
+    
+    Returns:
+        Dict với thông tin memory
+    """
+    print(f"\n{'='*60}")
+    print(f"📊 MEMORY SNAPSHOT: {stage if stage else 'Current'}")
+    print(f"{'='*60}")
+    
+    mem_data = get_memory_usage(log_memory=True)
+    
+    # Thêm disk info
+    import shutil
+    total, used, free = shutil.disk_usage("/")
+    print(f"[MEMORY] Disk Free: {free / (1024**3):.2f} GB")
+    
+    print(f"{'='*60}\n")
+    
+    return mem_data
 
 
 def format_time(seconds: float) -> str:
