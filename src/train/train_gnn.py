@@ -14,7 +14,7 @@ from tqdm import trange
 from src.models.fraudgnn_rl import FraudGNNRL
 from src.eval.evaluate import predict_scores
 from src.eval.metrics import classification_metrics
-from src.utils.pruning import get_pruning_stats, update_pruning_amount, remove_pruning
+from src.extensions.pruning import get_pruning_stats, update_pruning_amount, remove_pruning
 
 
 def _pos_weight(y: torch.Tensor) -> torch.Tensor:
@@ -24,7 +24,6 @@ def _pos_weight(y: torch.Tensor) -> torch.Tensor:
     return (neg / pos.clamp_min(1.0)).clamp_min(1.0)
 
 
-def _save_hybrid_summary(data, name: str, output_dir: str = "data/graphs") -> None:
     """Save hybrid graph summary if available."""
     summary = getattr(data, "hybrid_summary", None)
     if summary is not None:
@@ -65,8 +64,6 @@ def train_tssgc_classifier(
     print(f"[TSSGC] Using device: {device}")
     print(f"[TSSGC] Train nodes: {train_data.x.size(0)}, Val nodes: {val_data.x.size(0)}")
     
-    _save_hybrid_summary(train_data, "train")
-    _save_hybrid_summary(val_data, "val")
     
     model = FraudGNNRL(
         in_dim=train_data.x.size(-1),
@@ -116,23 +113,9 @@ def train_tssgc_classifier(
     
     neighbor_samples = train_cfg.get("neighbor_samples", [15, 10])
     
-    train_loader = NeighborLoader(
-        train_data,
-        num_neighbors=neighbor_samples,
-        batch_size=batch_size,
-        shuffle=True,
-        drop_last=True,
-        num_workers=0,
-    )
+    train_loader = [train_data]  # ✅ Full-batch
     
-    val_loader = NeighborLoader(
-        val_data,
-        num_neighbors=neighbor_samples,
-        batch_size=batch_size,
-        shuffle=False,
-        drop_last=False,
-        num_workers=0,
-    )
+    val_loader = [val_data]  # ✅ Full-batch
     
     # ✅ TIMING
     start_time = time.perf_counter()

@@ -10,7 +10,6 @@ experiment:
   ablation: baseline
   dataset: creditcard
   name: creditcard2023_baseline_seed42
-  pipeline: fraudgnn_rl
   seed: 42
 
 federated:
@@ -25,10 +24,8 @@ federated:
 
 flags:
   hard_edges: true
-  hybrid_graph: false
   pruning: false
   soft_edges: false
-  weighted_fusion: false
   dqn: false
 
 graph:

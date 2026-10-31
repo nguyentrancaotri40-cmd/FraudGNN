@@ -24,8 +24,6 @@
 flags:
   hard_edges: true
   soft_edges: false
-  hybrid_graph: false
-  weighted_fusion: false
   federated: true             
   rl: true
   pruning: false
@@ -33,7 +31,6 @@ flags:
 
 experiment:
   name: test_naf_soft
-  pipeline: fraudgnn_rl
   dataset: paysim
 
 dataset:

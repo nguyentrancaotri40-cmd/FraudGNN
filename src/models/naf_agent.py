@@ -69,11 +69,9 @@ class NAFNetwork(nn.Module):
         L = torch.zeros(batch_size, self.action_dim, self.action_dim, device=state.device)
         L[:, range(self.action_dim), range(self.action_dim)] = torch.exp(l1)
         
-        idx = 0
-        for i in range(self.action_dim):
-            for j in range(i):
-                L[:, i, j] = l2[:, idx]
-                idx += 1
+        # ✅ FIX: Vectorized lower triangular construction (Tăng tốc cực mạnh)
+        tril_indices = torch.tril_indices(self.action_dim, self.action_dim, offset=-1, device=state.device)
+        L[:, tril_indices[0], tril_indices[1]] = l2[:, :tril_indices[0].shape[0]]
         
         P = torch.bmm(L, L.transpose(1, 2))
         

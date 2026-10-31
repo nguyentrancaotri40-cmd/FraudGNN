@@ -36,8 +36,6 @@ from src.data.load_data import load_dataset
 from src.data.split import split_dataframe, get_cv_splits
 from src.data.preprocess import FraudPreprocessor
 from src.graph.build_graph import build_transaction_graph
-from src.graph.hybrid_graph import build_hybrid_transaction_graph
-from src.graph.soft_behavior_graph import build_soft_behavior_edges
 from src.graph.graph_utils import normalize_time_to_hours, make_edge_tensors
 from src.models.fraudgnn_rl import FraudGNNRL
 from src.train.federated import train_federated
@@ -156,13 +154,13 @@ def build_graph_from_flags(x, y, t, cfg, flags, entity_type=None):
     
     use_soft_edges = flags.get("soft_edges", False)
     use_hard_edges = flags.get("hard_edges", True)
-    use_hybrid_graph = flags.get("hybrid_graph", False)
     use_weighted_fusion = flags.get("weighted_fusion", False)
     
     # ============================================================
     # CASE 1: SOFT ONLY (không hard) — dùng cho ablation
     # ============================================================
     if use_soft_edges and not use_hard_edges:
+        from src.extensions.soft_behavior_graph import build_soft_behavior_edges, merge_hard_soft_edges
         ds = cfg.get("dataset", {})
         times_hours = normalize_time_to_hours(t, ds.get("time_unit"))
         
@@ -226,7 +224,6 @@ def build_graph_from_flags(x, y, t, cfg, flags, entity_type=None):
                 cfg_clone["hybrid_graph"].pop(key, None)
             print("  [HYBRID] UNWEIGHTED fusion")
         
-        return build_hybrid_transaction_graph(x, y, t, cfg_clone, entity_type=entity_type)
     
     # ============================================================
     # CASE 3: BASELINE (hard edges only) — FraudGNN-RL
@@ -536,6 +533,7 @@ def run_pipeline_on_split(
         
         if rl_type == "naf":
             from src.models.naf_agent import train_naf_agent
+            rl_epochs = cfg.get("rl", {}).get("epochs", 100) # ✅ Fix hiển thị số epochs cho NAF
             start = time.perf_counter()
             agent, rl_history = train_naf_agent(
                 val_scores, val_labels, cfg, 

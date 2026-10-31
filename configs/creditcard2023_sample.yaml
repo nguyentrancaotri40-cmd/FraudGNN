@@ -1,8 +1,6 @@
 flags:
   hard_edges: true
   soft_edges: false
-  hybrid_graph: false
-  weighted_fusion: false
   federated: true
   rl: true
   pruning: false
@@ -10,7 +8,6 @@ flags:
 
 experiment:
   name: creditcard_sample_10pct
-  pipeline: fraudgnn_rl
   dataset: creditcard
 
 dataset:

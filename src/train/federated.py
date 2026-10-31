@@ -226,14 +226,7 @@ class FederatedClient:
         total_batches = 0
         
         for epoch in range(epochs):
-            loader = NeighborLoader(
-                data,
-                num_neighbors=neighbor_samples,
-                batch_size=batch_size,
-                shuffle=True,
-                drop_last=True,
-                num_workers=0,
-            )
+            loader = [data]  # ✅ Bypass NeighborLoader, dùng full-batch (đồ thị nhỏ)
             
             epoch_loss = 0.0
             epoch_batches = 0
@@ -497,7 +490,6 @@ def create_federated_clients_from_raw_data(
     from src.data.load_data import load_dataset
     from src.data.preprocess import FraudPreprocessor
     from src.graph.build_graph import build_transaction_graph
-    from src.graph.hybrid_graph import build_hybrid_transaction_graph
     
     clients = []
     client_graphs = []
@@ -514,13 +506,14 @@ def create_federated_clients_from_raw_data(
             pre = FraudPreprocessor(client_cfg)
             x, y, t = pre.fit_transform(df)
             
-            flags = cfg.get("flags", {})
-            use_hybrid = flags.get("hybrid_graph", False)
+            from src.train.pipeline_fraudgnn import build_graph_from_flags
+
             
-            if use_hybrid:
-                graph = build_hybrid_transaction_graph(x, y, t, client_cfg)
-            else:
-                graph = build_transaction_graph(x, y, t, client_cfg)
+            flags = cfg.get("flags", {})
+
+            
+            graph = build_graph_from_flags(x, y, t, client_cfg, flags, entity_type=None)
+
             
             client_graphs.append(graph)
     
@@ -556,7 +549,6 @@ def create_federated_clients_from_different_datasets(
     from src.data.load_data import load_dataset
     from src.data.preprocess import FraudPreprocessor
     from src.graph.build_graph import build_transaction_graph
-    from src.graph.hybrid_graph import build_hybrid_transaction_graph
     
     clients = []
     client_graphs = []
@@ -571,13 +563,14 @@ def create_federated_clients_from_different_datasets(
         pre = FraudPreprocessor(client_cfg)
         x, y, t = pre.fit_transform(df)
         
-        flags = cfg.get("flags", {})
-        use_hybrid = flags.get("hybrid_graph", False)
+        from src.train.pipeline_fraudgnn import build_graph_from_flags
+
         
-        if use_hybrid:
-            graph = build_hybrid_transaction_graph(x, y, t, client_cfg)
-        else:
-            graph = build_transaction_graph(x, y, t, client_cfg)
+        flags = cfg.get("flags", {})
+
+        
+        graph = build_graph_from_flags(x, y, t, client_cfg, flags, entity_type=None)
+
         
         client_graphs.append(graph)
     
