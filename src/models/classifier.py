@@ -1,4 +1,9 @@
+# ============================================================
 # src/models/classifier.py
+#
+# Classifier head: Linear(hidden→hidden) → ReLU → Dropout → Linear(hidden→1).
+# ============================================================
+
 from __future__ import annotations
 
 import torch
@@ -21,3 +26,6 @@ class FraudClassifier(nn.Module):
     @torch.no_grad()
     def predict_proba(self, embedding: torch.Tensor) -> torch.Tensor:
         return torch.sigmoid(self.forward(embedding))
+
+
+__all__ = ["FraudClassifier"]

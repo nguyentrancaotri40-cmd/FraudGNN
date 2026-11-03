@@ -1,0 +1,54 @@
+flags:
+  federated: false                 # TẮT FL để chạy centralized (nhanh hơn)
+  rl: true
+
+experiment:
+  name: smoke_test
+  dataset: paysim
+  pipeline: fraudgnn_rl
+
+dataset:
+  name: PaySim
+  path: data/raw/paysim_fast.csv
+  label_col: isFraud
+  time_col: step
+  time_unit: hour
+  sample_frac: 0.01                # 1% ~ 63k dòng (đủ để temporal có fraud)
+  random_state: 42
+
+split:
+  strategy: temporal
+  train_ratio: 0.70
+  val_ratio: 0.15
+
+preprocess:
+  numeric_strategy: mean
+  categorical_strategy: most_frequent
+  drop_cols: [isFlaggedFraud, nameOrig, nameDest]
+  categorical_cols: [type]
+
+graph:
+  time_window_hours: 1.0
+  similarity_threshold: 0.9
+  max_neighbors_per_node: 3
+
+model:
+  hidden_dim: 32                   # Giảm để chạy nhanh
+  num_layers: 2                    # Giảm layer
+  dropout: 0.2
+  num_node_types: 5
+
+train:
+  epochs: 5                        # Chạy 5 epoch centralized (nhanh)
+  patience: 3
+  batch_size: 64
+  learning_rate: 0.001
+
+rl:
+  type: naf
+  epochs: 3
+  batch_size: 256
+  learning_rate: 0.001
+  tau: 0.005
+  fpr_penalty: 0.5
+  recall_weight: 0.25

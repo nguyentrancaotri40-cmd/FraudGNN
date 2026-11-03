@@ -25,7 +25,7 @@ class FraudGNNRL(nn.Module):
     ):
         super().__init__()
         
-        # ✅ FIX: Projection layer (trainable) cho shared_encoder
+        # [OK] FIX: Projection layer (trainable) cho shared_encoder
         self.use_projection = use_projection
         if use_projection:
             self.projection = nn.Linear(in_dim, projection_dim)
@@ -38,7 +38,9 @@ class FraudGNNRL(nn.Module):
         self.encoder = TSSGCEncoder(actual_in_dim, hidden_dim, num_layers, num_node_types, dropout)
         self.classifier = FraudClassifier(hidden_dim, hidden_dim, dropout)
         
-        # ✅ Feature importance weights (khởi tạo đều)
+        # [OK] Feature importance weights (khởi tạo đều)
+        # Lưu ý: requires_grad=False vì trọng số này được cập nhật bởi RL agent, 
+        # không phải bởi gradient descent.
         self._feature_weights = nn.Parameter(
             torch.ones(hidden_dim) / hidden_dim,
             requires_grad=False
@@ -50,7 +52,7 @@ class FraudGNNRL(nn.Module):
             self._feature_weights.data.copy_(weights.to(self._feature_weights.device))
     
     def forward(self, data) -> torch.Tensor:
-        # ✅ FIX: Đưa tất cả về cùng device
+        # [OK] FIX: Đưa tất cả về cùng device
         device = self._feature_weights.device
         
         x = data.x.to(device)
@@ -66,7 +68,7 @@ class FraudGNNRL(nn.Module):
         if edge_weight is not None:
             edge_weight = edge_weight.to(device)
         
-        # ✅ FIX: Projection (trainable)
+        # [OK] FIX: Projection (trainable)
         x = self.projection(x)
         
         emb = self.encoder(x, edge_index, edge_time_delta, node_type, edge_weight)
@@ -76,7 +78,7 @@ class FraudGNNRL(nn.Module):
     
     @torch.no_grad()
     def embeddings(self, data) -> torch.Tensor:
-        """✅ FIX: Lấy embeddings với projection (dùng cho RL State)."""
+        """[OK] FIX: Lấy embeddings với projection (dùng cho RL State)."""
         device = self._feature_weights.device
         
         x = data.x.to(device)
@@ -92,7 +94,7 @@ class FraudGNNRL(nn.Module):
         if edge_weight is not None:
             edge_weight = edge_weight.to(device)
         
-        # ✅ FIX: Áp dụng projection
+        # [OK] FIX: Áp dụng projection
         x = self.projection(x)
         
         emb = self.encoder(x, edge_index, edge_time_delta, node_type, edge_weight)

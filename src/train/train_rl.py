@@ -1,202 +1,131 @@
 # ============================================================
-# src/train/train_rl.py - FULL FIX
+# src/train/train_rl.py
+#
+# Wrapper RL: huấn luyện NAF trên tập validation, greedy eval trên test.
+#
+# Paper (Section IV-B, IV-D):
+#   - State  = graph embedding (từ TSSGC)
+#   - Action = (threshold, feature importance weights) — NAF
+#   - Reward = "combination of detection accuracy and FPR" → tự thiết kế
+#
+# [INFERRED] Paper KHÔNG nói rõ:
+#   - RL train trên tập nào (train/val)?
+#   → Nhóm chọn: train NAF trên VALIDATION (vì test phải giữ độc lập cho
+#     benchmark). Đây là chuẩn mực "hyperparameter tuning trên val".
+#   - Threshold cuối cùng để báo metric là gì?
+#   → Nhóm chọn: mean threshold mà NAF policy chọn greedy trên val.
 # ============================================================
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
+
 import numpy as np
-import time
-import torch
 
-from src.models.dqn_agent import ThresholdDQNAgent, BatchThresholdEnvironment
+from src.models.naf_agent import (
+    NAFAgent,
+    train_naf_agent,
+    apply_naf_policy,
+)
 
 
-def train_threshold_dqn(
-    scores: np.ndarray,
-    labels: np.ndarray,
+# ======================================================================
+# Train NAF trên val
+# ======================================================================
+def train_rl_on_validation(
+    val_scores: np.ndarray,
+    val_labels: np.ndarray,
+    val_embeddings: Optional[np.ndarray],
     cfg: Dict[str, Any],
-    device: str | None = None,
-    timing: dict | None = None
-):
-    """Train DQN agent on validation scores."""
-    rl_cfg = cfg.get("rl", {})
-    thresholds = [float(x) for x in rl_cfg.get("threshold_bins", [0.3, 0.4, 0.5, 0.6, 0.7])]
-    batch_size = int(rl_cfg.get("batch_size", 256))
-    
-    env = BatchThresholdEnvironment(
-        scores, labels,
-        batch_size=batch_size,
-        fpr_penalty=float(rl_cfg.get("fpr_penalty", 2.0)),
-    )
-    
-    agent = ThresholdDQNAgent(
-        state_dim=env.state_dim,
-        thresholds=thresholds,
-        hidden_dim=128,
-        device=device or ("cuda" if torch.cuda.is_available() else "cpu"),
-    )
-    
-    epochs = int(rl_cfg.get("epochs", 30))
-    losses = []
-    infos = []
-    
-    start_time = time.perf_counter()
-    
-    for ep in range(epochs):
-        state = env.reset()
-        done = False
-        while not done:
-            action = agent.act(state, explore=True)
-            threshold = agent.threshold(action)
-            next_state, reward, done, info = env.step(threshold)
-            agent.memory.push(state, action, reward, next_state, done)
-            loss = agent.update(batch_size=min(64, max(1, len(agent.memory))))
-            if loss is not None:
-                losses.append(loss)
-            infos.append(info)
-            state = next_state
-        agent.sync_target()
-    
-    if timing is not None:
-        timing["rl_training_sec"] = time.perf_counter() - start_time
-    
-    return agent, {"losses": losses, "infos": infos}
-
-
-def apply_dqn_policy(
-    agent: ThresholdDQNAgent,
-    scores: np.ndarray,
-    labels: np.ndarray,
-    cfg: Dict[str, Any],
-    device: str | None = None,
-    graph_embeddings: np.ndarray | None = None,
-) -> tuple[np.ndarray, float]:
-    """Apply trained DQN agent greedily to select thresholds per batch."""
-    import numpy as np
-    
-    rl_cfg = cfg.get("rl", {})
-    batch_size = int(rl_cfg.get("batch_size", 256))
-    fpr_penalty = float(rl_cfg.get("fpr_penalty", 2.0))
-    
-    env = BatchThresholdEnvironment(
-        scores=scores,
-        labels=labels,
-        graph_embeddings=graph_embeddings,
-        batch_size=batch_size,
-        fpr_penalty=fpr_penalty,
-    )
-    
-    state = env.reset()
-    done = False
-    thresholds = []
-    
-    while not done:
-        action = agent.act(state, explore=False)
-        threshold = agent.threshold(action)
-        thresholds.append(threshold)
-        state, _reward, done, _info = env.step(threshold)
-    
-    thresholds = np.array(thresholds)
-    mean_threshold = float(np.mean(thresholds))
-    
-    return thresholds, mean_threshold
-
-
-# ============================================================
-# ✅ FIX: apply_naf_policy - Đảm bảo threshold là float
-# ============================================================
-def apply_naf_policy(
-    agent,
-    scores: np.ndarray,
-    labels: np.ndarray,
-    cfg: Dict[str, Any],
-    graph_embeddings: np.ndarray | None = None,
-) -> tuple[float, dict]:
+    device: Optional[str] = None,
+    n_features: int = 64,
+) -> Tuple[NAFAgent, Dict[str, Any]]:
     """
-    Apply trained NAF agent greedily to select thresholds.
-    
-    ✅ FIX: Đảm bảo threshold trả về là float, không phải tuple
+    Train NAF agent trên val scores/labels/embeddings.
+
+    Returns:
+        (agent, rl_history)
     """
-    import numpy as np
-    
-    rl_cfg = cfg.get("rl", {})
-    batch_size = int(rl_cfg.get("batch_size", 256))
-    fpr_penalty = float(rl_cfg.get("fpr_penalty", 2.0))
-    
-    # Tạo environment với graph embeddings
-    from src.models.naf_agent import BatchNAFEnvironment
-    
-    env = BatchNAFEnvironment(
-        scores=scores,
-        labels=labels,
-        graph_embeddings=graph_embeddings,
-        batch_size=batch_size,
-        fpr_penalty=fpr_penalty,
+    print(f"\n[RL] Training NAF on val set")
+    print(f"[RL] val_samples={len(val_scores)}, n_features={n_features}")
+
+    agent, rl_history = train_naf_agent(
+        scores=val_scores,
+        labels=val_labels,
+        cfg=cfg,
+        graph_embeddings=val_embeddings,
+        device=device,
+        n_features=n_features,
     )
-    
-    state = env.reset()
-    done = False
-    thresholds = []
-    all_info = []
-    
-    while not done:
-        # ✅ Greedy: explore=False
-        # ✅ FIX: Lấy threshold từ action_vector - đảm bảo là float
-        action_vector, threshold, feature_weights = agent.act(state, explore=False)
-        
-        # ✅ Đảm bảo threshold là float
-        if isinstance(threshold, (tuple, list)):
-            threshold = float(threshold[0])
-        else:
-            threshold = float(threshold)
-        
-        thresholds.append(threshold)
-        
-        state, reward, done, info = env.step(threshold)
-        all_info.append(info)
-    
-    # ✅ Đảm bảo threshold là float
-    if thresholds:
-        mean_threshold = float(np.mean(thresholds))
+
+    losses = rl_history.get("losses", [])
+    if losses:
+        print(f"[RL] NAF done: {len(losses)} updates, "
+              f"avg_loss={np.mean(losses):.4f}, last_loss={losses[-1]:.4f}")
     else:
-        mean_threshold = 0.5
-    
-    metrics = {
-        'thresholds': thresholds,
-        'mean': mean_threshold,
-        'num_steps': len(thresholds),
-        'info': all_info,
-    }
-    
-    return mean_threshold, metrics
+        print(f"[RL] [WARN] NAF không update (buffer chưa đủ)")
+
+    return agent, rl_history
 
 
+# ======================================================================
+# Chọn threshold cuối cùng bằng NAF policy (greedy)
+# ======================================================================
+def select_threshold_with_rl(
+    agent: NAFAgent,
+    val_scores: np.ndarray,
+    val_labels: np.ndarray,
+    val_embeddings: Optional[np.ndarray],
+    cfg: Dict[str, Any],
+) -> Tuple[float, Dict[str, Any]]:
+    """
+    Greedy áp NAF trên val → trả về (mean_threshold, metrics).
+    """
+    threshold, metrics = apply_naf_policy(
+        agent,
+        scores=val_scores,
+        labels=val_labels,
+        cfg=cfg,
+        graph_embeddings=val_embeddings,
+    )
+    print(f"[RL] Selected threshold (NAF greedy mean): {threshold:.4f}")
+    return float(threshold), metrics
+
+
+# ======================================================================
+# Fallback grid search — CHỈ dùng khi NAF không chạy được
+# ======================================================================
 def choose_best_threshold_by_validation(
     scores: np.ndarray,
     labels: np.ndarray,
     thresholds: list[float],
     cfg: Dict[str, Any] | None = None,
-) -> tuple[float, dict]:
-    """Choose threshold on validation scores using grid search."""
+) -> Tuple[float, Dict[str, Any]]:
+    """
+    [FALLBACK — KHÔNG phải paper]
+    Grid search threshold trên val theo metric cấu hình.
+    Dùng khi NAF fail hoặc khi user chọn static threshold.
+
+    Default metric: f1
+    """
     from src.eval.metrics import classification_metrics
-    
+
     cfg = cfg or {}
-    sel_cfg = cfg.get("threshold_selection", {})
-    
-    metric = str(sel_cfg.get("metric", "custom"))
-    f1_weight = float(sel_cfg.get("f1_weight", 1.0))
-    recall_weight = float(sel_cfg.get("recall_weight", 0.25))
-    precision_weight = float(sel_cfg.get("precision_weight", 0.0))
-    fpr_weight = float(sel_cfg.get("fpr_weight", 0.25))
-    max_fpr = sel_cfg.get("max_fpr", None)
-    min_recall = sel_cfg.get("min_recall", None)
-    
-    all_metrics = []
-    for th in thresholds:
-        m = classification_metrics(labels, scores, threshold=th)
-        all_metrics.append(m)
-    
+    sel = cfg.get("threshold_selection", {})
+    metric = str(sel.get("metric", "f1"))
+    f1_w = float(sel.get("f1_weight", 1.0))
+    rec_w = float(sel.get("recall_weight", 0.25))
+    prec_w = float(sel.get("precision_weight", 0.0))
+    fpr_w = float(sel.get("fpr_weight", 0.25))
+    max_fpr = sel.get("max_fpr", None)
+    min_recall = sel.get("min_recall", None)
+
+    all_metrics = [
+        classification_metrics(labels, scores, threshold=th)
+        for th in thresholds
+    ]
+
+    # Filter ràng buộc
     candidates = []
     for m in all_metrics:
         if max_fpr is not None and float(m["fpr"]) > float(max_fpr):
@@ -204,39 +133,39 @@ def choose_best_threshold_by_validation(
         if min_recall is not None and float(m["recall"]) < float(min_recall):
             continue
         candidates.append(m)
-    
     if not candidates:
         candidates = all_metrics
-    
-    best_score = None
+
+    # Chọn best
+    best_score = -np.inf
     best_m = None
-    
     for m in candidates:
         if metric == "f1":
-            score = float(m["f1"])
+            s = float(m["f1"])
         elif metric == "auc_pr":
-            score = float(m["auc_pr"])
+            s = float(m["auc_pr"])
         elif metric == "recall_under_fpr":
-            score = float(m["recall"]) - fpr_weight * float(m["fpr"])
+            s = float(m["recall"]) - fpr_w * float(m["fpr"])
         elif metric == "precision_under_recall":
-            score = float(m["precision"]) + 0.25 * float(m["f1"])
-        else:
-            score = (
-                f1_weight * float(m["f1"])
-                + recall_weight * float(m["recall"])
-                + precision_weight * float(m["precision"])
-                - fpr_weight * float(m["fpr"])
-            )
-        
-        if best_score is None or score > best_score:
-            best_score = score
-            best_m = m
-    
+            s = float(m["precision"]) + 0.25 * float(m["f1"])
+        else:  # custom
+            s = (f1_w * float(m["f1"])
+                 + rec_w * float(m["recall"])
+                 + prec_w * float(m["precision"])
+                 - fpr_w * float(m["fpr"]))
+        if s > best_score:
+            best_score = s
+            best_m = dict(m)
+
     assert best_m is not None
-    
-    best_m = dict(best_m)
     best_m["threshold_selection_score"] = float(best_score)
     best_m["threshold_selection_metric"] = metric
     best_m["threshold_selection_candidates"] = len(candidates)
-    
     return float(best_m["threshold"]), best_m
+
+
+__all__ = [
+    "train_rl_on_validation",
+    "select_threshold_with_rl",
+    "choose_best_threshold_by_validation",
+]

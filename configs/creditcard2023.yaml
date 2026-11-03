@@ -1,78 +1,68 @@
+# ==========================================
+# Credit Card 2023 SAMPLE CONFIG
+# (Chạy test nhanh, không có time_col thực sự)
+# ==========================================
+
 flags:
-  hard_edges: true
-  soft_edges: false
   federated: true
   rl: true
-  pruning: false
-  dqn: false
 
 experiment:
-  name: creditcard_50pct_100epochs
+  name: creditcard_sample_test
   dataset: creditcard
+  pipeline: fraudgnn_rl
 
 dataset:
   name: CreditCard2023
   path: data/raw/creditcard_2023_fast.csv
   label_col: Class
-  sample_frac: 0.5
-  stratified_sampling: true
+  # ⚠️ C1: Dataset này KHÔNG CÓ cột thời gian thực sự.
+  # Code sẽ bỏ qua time_window_hours, chỉ dùng cosine similarity.
+  sample_frac: 0.1              # Giảm xuống 0.1 để chạy sample nhanh
   random_state: 42
 
 split:
-  strategy: stratified_random
+  strategy: stratified_random   # Bắt buộc cho CC2023 (b7)
   train_ratio: 0.70
   val_ratio: 0.15
 
 preprocess:
+  numeric_strategy: mean
+  categorical_strategy: most_frequent
   drop_cols:
-    - id
+    - id                        # Bỏ ID
   categorical_cols: []
-  numeric_strategy: median
 
 graph:
-  type: transaction_similarity
-  time_window_hours: 1000.0
-  similarity_threshold: 0.98
-  max_neighbors_per_node: 3
-  add_self_loops: true
+  # time_window_hours: null     # Không khai báo = None
+  similarity_threshold: 0.98    # Tự điều chỉnh cho hợp lý (paper 0.9 nhưng ko có time)
+  max_neighbors_per_node: 3     # Chặn OOM cho sample
 
 model:
   hidden_dim: 64
   num_layers: 3
   dropout: 0.20
-  num_node_types: 2
+  num_node_types: 1             # Sửa thành 1 (CC2023 không có cột loại)
 
 train:
-  epochs: 100
-  patience: 15
+  epochs: 10                    # Giảm để test
+  patience: 3
   batch_size: 64
   learning_rate: 0.001
-  weight_decay: 0.0001
 
 rl:
-  type: naf    
-  enabled: true
-  threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50]
-  fpr_penalty: 0.5
-  epochs: 100
+  type: naf
+  epochs: 5                     # Giảm để test
   batch_size: 256
-  tau: 0.005                     # ✅ THÊM
+  learning_rate: 0.001
+  gamma: 0.99
+  tau: 0.005
+  fpr_penalty: 0.5
+  recall_weight: 0.25
+  threshold_bins: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
 federated:
-  num_clients: 3
-  rounds: 20
-  local_epochs: 5
+  num_clients: 2                # Giảm để test
+  rounds: 3                     # Giảm để test
+  local_epochs: 2
   learning_rate: 0.001
-  batch_size: 64
-  aggregation: fedavg
-  align_graphs: true
-  alignment_method: shared_encoder
-
-threshold_selection:
-  metric: custom
-  f1_weight: 1.0
-  recall_weight: 0.8
-  precision_weight: 0.1
-  fpr_weight: 0.5
-  max_fpr: 0.20
-  min_recall: 0.30

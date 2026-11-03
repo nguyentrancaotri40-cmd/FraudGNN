@@ -1,37 +1,15 @@
 # ============================================================
-# CONFIG: TEST NAF - SOFT UPDATE (GIỐNG PAPER)
-# ============================================================
-# ✅ Giống paper 100% về methodology:
-#   - Temporal split (80-10-10) cho PaySim
-#   - batch_size (64 / 256)
-#   - max_neighbors_per_node (3)
-#   - hidden_dim (64), num_layers (3)
-#   - similarity_threshold (0.9)
-#   - Stratified random sampling
-#   - Federated Learning (bật)
-#   - Entity graph: node = user (giữ nameOrig/nameDest)
-#   - NAF: continuous action (threshold + feature weights)
-#   - ✅ FIX: Soft update (tau) thay vì hard sync
-#
-# ⚠️ Chỉ khác paper để test nhanh:
-#   - sample_frac: 0.02 (2% data)
-#   - train.epochs: 1 (chỉ 1 epoch cho FL)
-#   - federated.rounds: 5 (vẫn giữ 5 để test FL)
-#   - federated.local_epochs: 1
-#   - rl.epochs: 100 ✅ GIỮ NGUYÊN để kiểm tra loss
+# CONFIG: TEST NHANH PIPELINE (Smoke Test)
 # ============================================================
 
 flags:
-  hard_edges: true
-  soft_edges: false
   federated: true             
   rl: true
-  pruning: false
-  dqn: false
 
 experiment:
-  name: test_naf_soft
+  name: test_naf_smoke
   dataset: paysim
+  pipeline: fraudgnn_rl
 
 dataset:
   name: PaySim
@@ -40,27 +18,27 @@ dataset:
   time_col: step
   time_unit: hour
   sample_frac: 0.02
-  stratified_sampling: true
   random_state: 42
 
 split:
   strategy: temporal
-  train_ratio: 0.80
-  val_ratio: 0.10
+  train_ratio: 0.70          # Dùng 70/15/15 cho pipeline chuẩn
+  val_ratio: 0.15
 
 preprocess:
+  numeric_strategy: mean     # Paper V-A-1 quy định mean (không phải median)
+  categorical_strategy: most_frequent
   drop_cols:
     - isFlaggedFraud
+    - nameOrig               # Bỏ ID để tránh tràn RAM OneHot
+    - nameDest
   categorical_cols:
     - type
-  numeric_strategy: median
 
 graph:
-  type: transaction_similarity
   time_window_hours: 1.0
   similarity_threshold: 0.9
-  max_neighbors_per_node: 3
-  add_self_loops: true
+  max_neighbors_per_node: 3  # Giữ để test nhanh không nổ RAM
 
 model:
   hidden_dim: 64
@@ -73,42 +51,22 @@ train:
   patience: 1
   batch_size: 64
   learning_rate: 0.001
-  weight_decay: 0.0001
 
-# ============================================================
-# ✅ NAF CONFIG - SOFT UPDATE (continuous action)
-# ============================================================
 rl:
-  type: naf    
-  enabled: true
-  threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
-  fpr_penalty: 0.5
+  type: naf
   epochs: 100
   batch_size: 256
-  learning_rate: 0.000001
-  buffer_size: 200000
-  epsilon_start: 1.0
-  epsilon_end: 0.01
-  epsilon_decay: 0.9999
+  learning_rate: 0.001       # ✅ Fix: 0.001 như paper (không phải 1e-6)
+  gamma: 0.99
   tau: 0.005
-  grad_clip: 0.5
+  buffer_size: 200000
   min_buffer_size: 512
+  fpr_penalty: 0.5
+  recall_weight: 0.25
+  threshold_bins: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
 federated:
   num_clients: 3
   rounds: 5
   local_epochs: 1
   learning_rate: 0.001
-  batch_size: 64
-  aggregation: fedavg
-  align_graphs: true
-  alignment_method: shared_encoder
-
-threshold_selection:
-  metric: custom
-  f1_weight: 1.0
-  recall_weight: 0.8
-  precision_weight: 0.1
-  fpr_weight: 0.5
-  max_fpr: 0.20
-  min_recall: 0.30

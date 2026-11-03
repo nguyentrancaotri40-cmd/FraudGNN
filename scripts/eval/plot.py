@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """
-Vẽ biểu đồ so sánh ablation study
+Vẽ biểu đồ so sánh ablation study (Hình 3 trong paper)
 """
-
 import argparse
 import json
 from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
-import numpy as np
 
 
 def load_ablation_results(path: str) -> dict:
@@ -18,10 +16,9 @@ def load_ablation_results(path: str) -> dict:
 
 def plot_ablation_comparison(results: dict, output_dir: str = "outputs/figures"):
     """Vẽ biểu đồ so sánh các ablation variants."""
-    
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     data = []
     for name, result in results.items():
         if result and 'test_metrics' in result:
@@ -35,18 +32,17 @@ def plot_ablation_comparison(results: dict, output_dir: str = "outputs/figures")
                 'precision': m.get('precision', 0),
                 'fpr': m.get('fpr', 0),
             })
-    
+
     if not data:
         print("No data to plot")
         return
-    
+
     df = pd.DataFrame(data)
     df = df.set_index('name')
-    
+
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    
     metrics = [('auc_roc', 'AUC-ROC'), ('auc_pr', 'AUC-PR'), ('f1', 'F1'), ('recall', 'Recall')]
-    
+
     for ax, (metric, title) in zip(axes.flatten(), metrics):
         df[metric].plot(kind='bar', ax=ax)
         ax.set_title(f'{title} Comparison')
@@ -55,15 +51,14 @@ def plot_ablation_comparison(results: dict, output_dir: str = "outputs/figures")
         ax.set_ylim(0, 1.05)
         ax.grid(True, alpha=0.3)
         ax.legend().remove()
-        
+
         for i, v in enumerate(df[metric]):
             ax.text(i, v + 0.01, f'{v:.3f}', ha='center', va='bottom', fontsize=8)
-    
+
     plt.tight_layout()
     plt.savefig(output_dir / 'ablation_comparison.png', dpi=200)
     plt.close()
-    
-    print(f"✅ Figure saved to: {output_dir / 'ablation_comparison.png'}")
+    print(f"[OK] Figure saved to: {output_dir / 'ablation_comparison.png'}")
 
 
 def main():
@@ -71,7 +66,7 @@ def main():
     parser.add_argument('--results', type=str, required=True, help='Path to ablation_summary.json')
     parser.add_argument('--output', type=str, default='outputs/figures')
     args = parser.parse_args()
-    
+
     results = load_ablation_results(args.results)
     plot_ablation_comparison(results, args.output)
 

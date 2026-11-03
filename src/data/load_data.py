@@ -1,184 +1,127 @@
+# ============================================================
+# src/data/load_data.py
+#
+# Theo paper Section V-A-1:
+#   - Load 3 dataset: PaySim, Credit Card 2023, IEEE-CIS
+#   - IEEE-CIS: merge transaction + identity bằng TransactionID,
+#     xử lý trường hợp thiếu identity info (left join, giữ NaN)
+#
+# [WARN] [INFERRED] Paper nói "for PaySim, we use an 80-20 random split"
+# nhưng KHÔNG nói có sample_frac. Nhóm KHÔNG stratified-sample như bản
+# cũ (đó là giả lập paper). Chỉ load toàn bộ CSV gốc. Nếu tràn RAM thì
+# user tự giảm sample_frac trong config — KHÔNG mặc định sample.
+# ============================================================
+
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict
+
 import pandas as pd
 
 
-def _sample(df: pd.DataFrame, n: int | None, random_state: int = 42) -> pd.DataFrame:
-    if n is None or n <= 0 or n >= len(df):
-        return df.reset_index(drop=True)
-
-    return df.sample(n=n, random_state=random_state).reset_index(drop=True)
-
-
-def _sample_by_class(
-    df: pd.DataFrame,
-    label_col: str,
-    normal_sample_size: int | None = None,
-    fraud_sample_size: int | str | None = None,
-    random_state: int = 42,
-    time_col: str | None = None,
-) -> pd.DataFrame:
-    """Sample normal and fraud rows separately."""
-    if normal_sample_size is None and fraud_sample_size is None:
-        return df.reset_index(drop=True)
-
-    normal_df = df[df[label_col] == 0]
-    fraud_df = df[df[label_col] == 1]
-
-    if normal_sample_size is None:
-        sampled_normal = normal_df
-    else:
-        normal_sample_size = int(normal_sample_size)
-        if normal_sample_size <= 0 or normal_sample_size >= len(normal_df):
-            sampled_normal = normal_df
-        else:
-            sampled_normal = normal_df.sample(
-                n=normal_sample_size,
-                random_state=random_state,
-            )
-
-    if fraud_sample_size is None or str(fraud_sample_size).lower() == "all":
-        sampled_fraud = fraud_df
-    else:
-        fraud_sample_size = int(fraud_sample_size)
-        if fraud_sample_size <= 0 or fraud_sample_size >= len(fraud_df):
-            sampled_fraud = fraud_df
-        else:
-            sampled_fraud = fraud_df.sample(
-                n=fraud_sample_size,
-                random_state=random_state,
-            )
-
-    out = pd.concat([sampled_normal, sampled_fraud], axis=0)
-
-    if time_col and time_col in out.columns:
-        out = out.sort_values(time_col)
-
-    return out.reset_index(drop=True)
-
-
 def load_dataset(cfg: Dict[str, Any]) -> pd.DataFrame:
-    """Load dataset với random sampling (giống paper)."""
+    """
+    Load dataset theo cfg["dataset"].
+
+    Hỗ trợ 2 mode:
+      A. cfg["dataset"]["transaction_path"] (+ identity_path) → IEEE-CIS
+      B. cfg["dataset"]["path"] → file CSV đơn (PaySim, CC2023)
+
+    Sau khi load:
+      - Tạo cột time_col nếu config yêu cầu (vd. time_idx từ TransactionDT)
+      - sample_frac (nếu < 1.0) — chỉ dùng để test nhanh, KHÔNG phải paper
+    """
     ds = cfg["dataset"]
 
-    random_state = int(ds.get("random_state", 42))
-    sample_rows = ds.get("sample_rows")
-
     # ============================================================
-    # 1. LOAD DATA
+    # A. IEEE-CIS: transaction + identity
     # ============================================================
     if "transaction_path" in ds:
         tx_path = Path(ds["transaction_path"])
-        id_path = Path(ds.get("identity_path", ""))
+        id_path_str = ds.get("identity_path", "")
+        id_path = Path(id_path_str) if id_path_str else None
         key_col = ds.get("key_col", "TransactionID")
 
         if not tx_path.exists():
             raise FileNotFoundError(f"Transaction file not found: {tx_path}")
 
+        print(f"[LOAD] Reading transactions: {tx_path}")
         tx = pd.read_csv(tx_path)
 
-        if id_path and id_path.exists():
+        if id_path is not None and id_path.exists():
+            print(f"[LOAD] Reading identity: {id_path}")
             ident = pd.read_csv(id_path)
+            # Paper: "merge using TransactionID, handling cases where identity
+            # information is missing" → LEFT JOIN, giữ NaN cho identity thiếu.
             df = tx.merge(ident, how="left", on=key_col)
+            print(f"[LOAD] Merged: {tx.shape} + {ident.shape} → {df.shape}")
         else:
+            print("[LOAD] No identity file → chỉ dùng transaction features")
             df = tx
 
+    # ============================================================
+    # B. File CSV đơn (PaySim, CC2023)
+    # ============================================================
     else:
         path = Path(ds["path"])
         if not path.exists():
             raise FileNotFoundError(f"Dataset file not found: {path}")
+        print(f"[LOAD] Reading: {path}")
         df = pd.read_csv(path)
-        df = df.fillna(0)
 
     label_col = ds["label_col"]
-
     if label_col not in df.columns:
         raise ValueError(
             f"Label column '{label_col}' not found. "
-            f"Available columns: {list(df.columns)[:30]}..."
+            f"Có sẵn: {list(df.columns)[:30]}..."
         )
 
     # ============================================================
-    # 2. TẠO CỘT time_idx NẾU CHƯA CÓ (cho IEEE-CIS)
+    # Tạo cột time_col nếu config yêu cầu & cột gốc khác
     # ============================================================
     time_col = ds.get("time_col")
-    
-    if time_col == "time_idx" and time_col not in df.columns:
-        if "TransactionDT" in df.columns:
-            df["time_idx"] = df["TransactionDT"]
-            print("[INFO] Created 'time_idx' from 'TransactionDT'")
-        elif "time" in df.columns:
-            df["time_idx"] = df["time"]
-            print("[INFO] Created 'time_idx' from 'time'")
-        else:
-            df["time_idx"] = range(len(df))
-            print("[INFO] Created 'time_idx' as row index")
+    if time_col and time_col not in df.columns:
+        # [INFERRED] Paper không nói cách ánh xạ, nhóm chọn heuristic
+        if time_col == "time_idx":
+            if "TransactionDT" in df.columns:
+                df["time_idx"] = df["TransactionDT"]
+                print("[LOAD] Tạo time_idx = TransactionDT (giây)")
+            elif "Time" in df.columns:
+                df["time_idx"] = df["Time"]
+                print("[LOAD] Tạo time_idx = Time (giây, CC2023)")
+            elif "time" in df.columns:
+                df["time_idx"] = df["time"]
+                print("[LOAD] Tạo time_idx = time")
+            elif "step" in df.columns:
+                df["time_idx"] = df["step"]
+                print("[LOAD] Tạo time_idx = step (giờ, PaySim)")
+            else:
+                df["time_idx"] = range(len(df))
+                print("[LOAD] [WARN] Không có cột thời gian gốc — dùng row index [INFERRED]")
 
     # ============================================================
-    # 3. ✅ GIỐNG PAPER: STRATIFIED RANDOM SAMPLING
+    # sample_frac (OPTIONAL — không phải paper, chỉ để test nhanh)
     # ============================================================
     sample_frac = ds.get("sample_frac", 1.0)
-    use_stratified_sampling = ds.get("stratified_sampling", True)
-
-    if sample_frac is not None and sample_frac < 1.0 and use_stratified_sampling:
-        print(f"[INFO] Stratified random sampling: {sample_frac*100:.0f}% (giống paper)")
-
-        fraud_df = df[df[label_col] == 1]
-        normal_df = df[df[label_col] == 0]
-
-        original_fraud = len(fraud_df)
-        original_normal = len(normal_df)
-
-        # ✅ Random sampling từng class (giống paper)
-        sampled_fraud = fraud_df.sample(frac=sample_frac, random_state=random_state)
-        sampled_normal = normal_df.sample(frac=sample_frac, random_state=random_state)
-
-        # ✅ Ghép lại và SORT theo thời gian (GIỮ NGUYÊN THỨ TỰ THỜI GIAN)
-        df = pd.concat([sampled_normal, sampled_fraud])
-
-        if time_col and time_col in df.columns:
-            df = df.sort_values(time_col).reset_index(drop=True)
-            print(f"[INFO] Preserved temporal ordering by {time_col} (giống paper)")
-
-        print(f"[INFO] Sampled {sample_frac*100:.0f}% of data:")
-        print(f"  Fraud: {original_fraud:,} -> {len(sampled_fraud):,}")
-        print(f"  Normal: {original_normal:,} -> {len(sampled_normal):,}")
-        print(f"  Total: {original_fraud + original_normal:,} -> {len(df):,}")
-    else:
+    if sample_frac is not None and float(sample_frac) < 1.0:
         original_len = len(df)
-        if sample_frac is not None and sample_frac < 1.0:
-            df = df.sample(frac=sample_frac, random_state=random_state)
-            print(f"[INFO] Sampled {sample_frac*100:.0f}% of data: {original_len:,} -> {len(df):,} rows")
+        df = df.sample(frac=float(sample_frac), random_state=int(ds.get("random_state", 42)))
+        print(f"[LOAD] [WARN] sample_frac={sample_frac} (KHÔNG phải paper): "
+              f"{original_len:,} → {len(df):,}")
 
     # ============================================================
-    # 4. SAMPLE THEO CLASS (nếu config yêu cầu)
+    # LOG
     # ============================================================
-    normal_sample_size = ds.get("normal_sample_size")
-    fraud_sample_size = ds.get("fraud_sample_size")
-
-    if normal_sample_size is not None or fraud_sample_size is not None:
-        df = _sample_by_class(
-            df=df,
-            label_col=label_col,
-            normal_sample_size=normal_sample_size,
-            fraud_sample_size=fraud_sample_size,
-            random_state=random_state,
-            time_col=time_col,
-        )
-    else:
-        df = _sample(df, sample_rows, random_state=random_state)
-
-    # ============================================================
-    # 5. LOG
-    # ============================================================
-    print("\nLoaded dataset:")
-    print(f"  shape: {df.shape}")
+    print("\n[LOAD] Loaded dataset:")
+    print(f"  shape : {df.shape}")
     print(f"  labels: {df[label_col].value_counts().sort_index().to_dict()}")
     if time_col and time_col in df.columns:
-        print(f"  time_col: {time_col} (min: {df[time_col].min()}, max: {df[time_col].max()})")
+        print(f"  time_col '{time_col}': min={df[time_col].min()}, max={df[time_col].max()}")
     else:
-        print(f"  ⚠️ time_col '{time_col}' not found!")
+        print(f"  [WARN] time_col '{time_col}' not found!")
 
     return df
+
+
+__all__ = ["load_dataset"]

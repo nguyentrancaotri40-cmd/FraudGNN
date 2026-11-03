@@ -1,23 +1,23 @@
+# ==========================================
+# IEEE-CIS SAMPLE CONFIG (Chạy test nhanh)
+# ==========================================
+
 flags:
-  hard_edges: true
-  soft_edges: false
   federated: true
   rl: true
-  pruning: false
-  dqn: false
 
 experiment:
-  name: ieee_cis_paper_100
-  dataset: ieee
+  name: ieee_cis_sample_test
+  dataset: ieee                 # Bắt buộc là 'ieee' để nhận diện ProductCD
+  pipeline: fraudgnn_rl
 
 dataset:
   name: IEEE-CIS
-  path: data/raw/ieee_cis_fast.csv
+  path: data/raw/ieee_cis_fast.csv  # Nếu file đã merge sẵn
   label_col: isFraud
   time_col: TransactionDT
   time_unit: second
-  sample_frac: 0.5
-  stratified_sampling: true
+  sample_frac: 0.1              # Giảm xuống 0.1 để chạy sample siêu nhanh
   random_state: 42
 
 split:
@@ -26,128 +26,49 @@ split:
   val_ratio: 0.15
 
 preprocess:
+  numeric_strategy: mean
+  categorical_strategy: most_frequent  # FIX: Bắt buộc là most_frequent (paper quy định mode)
   drop_cols:
     - time_idx
     - TransactionID
     - TransactionDT
-    - card1
-    - card2
-    - card3
-    - card4
-    - card5
-    - card6
-    - addr1
-    - addr2
-    - P_emaildomain
-    - R_emaildomain
-    - id_01
-    - id_02
-    - id_03
-    - id_04
-    - id_05
-    - id_06
-    - id_07
-    - id_08
-    - id_09
-    - id_10
-    - id_11
-    - id_12
-    - id_13
-    - id_14
-    - id_15
-    - id_16
-    - id_17
-    - id_18
-    - id_19
-    - id_20
-    - id_21
-    - id_22
-    - id_23
-    - id_24
-    - id_25
-    - id_26
-    - id_27
-    - id_28
-    - id_29
-    - id_30
-    - id_31
-    - id_32
-    - id_33
-    - id_34
-    - id_35
-    - id_36
-    - id_37
-    - id_38
-    - id_39
-    - id_40
-    - id_41
-    - id_42
-    - id_43
-    - id_44
-    - id_45
-    - id_46
-    - id_47
-    - id_48
-    - id_49
-    - id_50
-    - M1
-    - M2
-    - M3
-    - M4
-    - M5
-    - M6
-    - M7
-    - M8
-    - M9
+    # [LƯU Ý] Đã BỎ việc xóa card1-6, addr, M1-M9, id_xx 
+    # để giữ đúng đặc trưng identity như paper yêu cầu.
+    # Nếu chạy sample bị tràn RAM, bạn có thể bật lại việc xóa id_xx.
   categorical_cols:
     - ProductCD
-  numeric_strategy: median
-  categorical_strategy: unknown
+    # Bạn có thể thêm các cột string khác vào đây nếu muốn (card4, card6, v.v.)
 
 graph:
-  type: transaction_similarity
-  time_window_hours: 50.0
-  similarity_threshold: 0.99
-  max_neighbors_per_node: 3
-  add_self_loops: true
+  time_window_hours: 1.0        
+  similarity_threshold: 0.9     
+  max_neighbors_per_node: 3      # Giữ lại để chạy sample không nổ RAM
 
 model:
   hidden_dim: 64
   num_layers: 3
   dropout: 0.20
-  num_node_types: 3
+  num_node_types: 5              # Sửa thành 5 (ProductCD có 5 loại: W, H, C, S, R)
 
 train:
-  epochs: 100
-  patience: 15
+  epochs: 10                     # Giảm epochs để test nhanh
+  patience: 3
   batch_size: 64
   learning_rate: 0.001
-  weight_decay: 0.0001
 
 rl:
   type: naf    
-  enabled: true
-  threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60]
-  fpr_penalty: 0.3
-  epochs: 100
+  epochs: 5                      # Giảm RL epochs để test nhanh
   batch_size: 256
-  tau: 0.005                     # ✅ THÊM
+  learning_rate: 0.001
+  gamma: 0.99
+  tau: 0.005
+  fpr_penalty: 0.3
+  recall_weight: 0.25
+  threshold_bins: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 
 federated:
-  num_clients: 3
-  rounds: 20
-  local_epochs: 5
+  num_clients: 2                 # Giảm client để test nhanh
+  rounds: 3                      # Giảm rounds
+  local_epochs: 2
   learning_rate: 0.001
-  batch_size: 64
-  aggregation: fedavg
-  align_graphs: true
-  alignment_method: shared_encoder
-
-threshold_selection:
-  metric: custom
-  f1_weight: 1.0
-  recall_weight: 0.8
-  precision_weight: 0.1
-  fpr_weight: 0.5
-  max_fpr: 0.20
-  min_recall: 0.30

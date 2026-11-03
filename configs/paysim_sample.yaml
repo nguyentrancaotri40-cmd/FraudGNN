@@ -1,45 +1,45 @@
+# ==========================================
+# PaySim Sample Config (Chạy test nhanh, giới hạn RAM)
+# ==========================================
+
+# Các flags dư không ảnh hưởng code mới, nhưng để cho gọn:
 flags:
-  hard_edges: true
-  soft_edges: false
   federated: true
   rl: true
-  pruning: false
-  dqn: false
 
 experiment:
-  name: paysim_sample_10pct
+  name: paysim_sample_test
   dataset: paysim
+  pipeline: fraudgnn_rl
 
 dataset:
   name: PaySim
-  path: data/raw/paysim_fast.csv
+  path: data/raw/paysim_fast.csv  # Đảm bảo file này tồn tại
   label_col: isFraud
   time_col: step
   time_unit: hour
-  sample_frac: 0.05
-  stratified_sampling: true
+  sample_frac: 0.1                 # Giảm xuống 0.1 để chạy sample cực nhanh
   random_state: 42
 
 split:
   strategy: temporal
-  train_ratio: 0.70
+  train_ratio: 0.70                # Dùng 70/15/15 cho chuẩn pipeline
   val_ratio: 0.15
 
 preprocess:
+  numeric_strategy: mean
+  categorical_strategy: most_frequent
   drop_cols:
-    - nameOrig
-    - nameDest
     - isFlaggedFraud
+    - nameOrig                     # Bỏ ID để tránh lỗi one-hot bùng nổ
+    - nameDest
   categorical_cols:
     - type
-  numeric_strategy: median
 
 graph:
-  type: transaction_similarity
   time_window_hours: 1.0
   similarity_threshold: 0.9
-  max_neighbors_per_node: 3
-  add_self_loops: true
+  max_neighbors_per_node: 3        # Giữ lại để chạy sample không nổ RAM
 
 model:
   hidden_dim: 64
@@ -48,45 +48,23 @@ model:
   num_node_types: 5
 
 train:
-  epochs: 100
+  epochs: 10                       # Giảm xuống 10 epoch để test
   patience: 3
   batch_size: 64
   learning_rate: 0.001
-  weight_decay: 0.0001
 
 rl:
   type: naf
-  enabled: true
-  threshold_bins:
-    - 0.05
-    - 0.10
-    - 0.15
-    - 0.20
-    - 0.25
-    - 0.30
-    - 0.35
-    - 0.40
-  fpr_penalty: 1.0
-  epochs: 100
+  epochs: 5                        # Giảm epochs RL để test
   batch_size: 256
-  learning_rate: 0.0001
-  tau: 0.005                     # ✅ THÊM
+  learning_rate: 0.001
+  tau: 0.005
+  fpr_penalty: 1.0
+  recall_weight: 0.25
+  threshold_bins: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9] # Mở rộng dải
 
 federated:
-  num_clients: 3
-  rounds: 3
-  local_epochs: 1
+  num_clients: 2                   # Giảm client để chạy nhanh
+  rounds: 3                        # Giảm rounds
+  local_epochs: 2
   learning_rate: 0.001
-  batch_size: 64
-  aggregation: fedavg
-  align_graphs: true
-  alignment_method: shared_encoder
-
-threshold_selection:
-  metric: custom
-  f1_weight: 1.0
-  recall_weight: 0.8
-  precision_weight: 0.1
-  fpr_weight: 0.5
-  max_fpr: 0.20
-  min_recall: 0.30

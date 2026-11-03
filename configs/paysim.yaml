@@ -1,23 +1,24 @@
+# ==========================================
+# PaySim CONFIG — REPRODUCTION 100% PAPER
+# (Paper: Cui et al., IEEE JOCS 2025)
+# ==========================================
+
 flags:
-  hard_edges: true
-  soft_edges: false
   federated: true
   rl: true
-  pruning: false
-  dqn: false
 
 experiment:
-  name: paysim_50pct_100epochs
+  name: paysim_paper_repro
   dataset: paysim
+  pipeline: fraudgnn_rl
 
 dataset:
   name: PaySim
-  path: data/raw/paysim_fast.csv
+  path: data/raw/paysim_fast.csv       # Dùng file gốc (không phải paysim_fast.csv)
   label_col: isFraud
   time_col: step
   time_unit: hour
-  sample_frac: 0.5
-  stratified_sampling: true
+  sample_frac: 1.0                 # ✅ PAPER: dùng toàn bộ data
   random_state: 42
 
 split:
@@ -26,58 +27,39 @@ split:
   val_ratio: 0.15
 
 preprocess:
-  drop_cols:
-    - nameOrig
-    - nameDest
-    - isFlaggedFraud
-  categorical_cols:
-    - type
-  numeric_strategy: median
+  numeric_strategy: mean           # ✅ PAPER
+  categorical_strategy: most_frequent  # ✅ PAPER
+  drop_cols: [isFlaggedFraud, nameOrig, nameDest]
+  categorical_cols: [type]
 
 graph:
-  type: transaction_similarity
-  time_window_hours: 1.0
-  similarity_threshold: 0.9
-  max_neighbors_per_node: 3
-  add_self_loops: true
+  time_window_hours: 1.0           # ✅ PAPER
+  similarity_threshold: 0.9        # ✅ PAPER
+  # max_neighbors_per_node: null   # ✅ PAPER: không giới hạn (bỏ comment nếu OOM)
 
 model:
-  hidden_dim: 64
-  num_layers: 3
-  dropout: 0.20
+  hidden_dim: 64                   # ✅ PAPER
+  num_layers: 3                    # ✅ PAPER
+  dropout: 0.2
   num_node_types: 5
 
 train:
-  epochs: 100
-  patience: 15
-  batch_size: 64
-  learning_rate: 0.001
-  weight_decay: 0.0001
+  epochs: 100                      # ✅ PAPER
+  patience: 10                     # ✅ PAPER
+  batch_size: 64                   # ✅ PAPER
+  learning_rate: 0.001             # ✅ PAPER
 
 rl:
-  type: naf    
-  enabled: true
-  threshold_bins: [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40]
-  fpr_penalty: 0.5
+  type: naf
   epochs: 100
   batch_size: 256
-  tau: 0.005                     # ✅ THÊM
+  learning_rate: 0.001
+  tau: 0.005
+  fpr_penalty: 0.5
+  recall_weight: 0.25
 
 federated:
   num_clients: 3
-  rounds: 20
+  rounds: 10
   local_epochs: 5
   learning_rate: 0.001
-  batch_size: 64
-  aggregation: fedavg
-  align_graphs: true
-  alignment_method: shared_encoder
-
-threshold_selection:
-  metric: custom
-  f1_weight: 1.0
-  recall_weight: 0.8
-  precision_weight: 0.1
-  fpr_weight: 0.5
-  max_fpr: 0.20
-  min_recall: 0.30
