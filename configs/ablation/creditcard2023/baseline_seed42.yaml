@@ -1,0 +1,97 @@
+# ============================================================
+# Ablation CC2023 — Baseline (= paper), seed 42. So sánh: đổi flags.soft_edges/pruning rồi chạy lại cùng seed
+# [PAPER]    = paper nêu rõ  | [INFERRED] = paper không nêu, chọn tối ưu cho model
+# [DEVIATION]= cap kỹ thuật/khác paper (được ghi vào kết quả `deviations_from_paper`)
+# ============================================================
+seed: 42
+flags:
+  gnn: true
+  rl: true
+  federated: true
+  hard_edges: true
+  soft_edges: false
+  pruning: false
+experiment:
+  name: cc2023_baseline_seed42
+  dataset: creditcard2023
+  pipeline: fraudgnn_rl
+runtime:
+  device: auto
+output:
+  dir: outputs
+graph:
+  time_window_hours: 1.0
+  similarity_threshold: 0.9
+  max_neighbors_per_node: 16
+  device: null
+  chunk_elems: 20000000.0
+model:
+  hidden_dim: 64
+  num_layers: 3
+  dropout: 0.2
+  shared_projection: true
+  temporal_max_seq_len: 16
+train:
+  epochs: 100
+  patience: 10
+  batch_size: 64
+  learning_rate: 0.001
+  weight_decay: 0.0
+  pos_weight_max: 100.0
+  batch_mode: full
+  subgraph_nodes: 20000
+  grad_steps_per_epoch: 1
+  eval_chunk_nodes: null
+rl:
+  type: naf
+  hidden_dim: 128
+  learning_rate: 0.001
+  epochs: 100
+  env_batch_size: 256
+  update_batch_size: 64
+  gamma: 0.99
+  tau: 0.005
+  buffer_size: 10000
+  fpr_penalty: 1.0
+  recall_weight: 0.25
+  inference: mean
+  n_threshold_bins: 19
+federated:
+  num_clients: 3
+  rounds: 50
+  local_epochs: 2
+  client_fraction: 1.0
+  learning_rate: 0.001
+  patience: 10
+soft_graph:
+  enabled: true
+  similarity_threshold: 0.85
+  max_neighbors_per_node: 5
+  time_window_hours: 1.0
+  causal: true
+  feature_indices: null
+pruning:
+  start_epoch: 5
+  end_epoch: 25
+  initial_amount: 0.1
+  final_amount: 0.3
+dataset:
+  name: CreditCard2023
+  path: data/raw/creditcard_2023.csv
+  label_col: Class
+  time_col: null
+  time_unit: null
+  sample_frac: null
+  random_state: 42
+  entity_type_col: null
+  entity_type_values: null
+split:
+  strategy: stratified_random
+  train_ratio: 0.64
+  val_ratio: 0.16
+preprocess:
+  numeric_strategy: mean
+  categorical_strategy: most_frequent
+  drop_cols:
+  - id
+  categorical_cols: []

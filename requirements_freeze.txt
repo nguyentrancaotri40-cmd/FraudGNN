@@ -1,0 +1,13 @@
+# Phiên bản đã kiểm thử đơn vị (verify_all.py --unit) — cài đặt tối thiểu có thể khác trên máy bạn.
+torch==2.15.0
+torch-geometric==2.8.1
+numpy==2.5.3
+pandas==3.0.5
+scikit-learn==1.9.1
+scipy==1.18.1
+xgboost==3.4.1
+PyYAML==6.0.3
+matplotlib==3.11.2
+psutil==7.2.2
+joblib==1.6.0
+tqdm==4.70.1

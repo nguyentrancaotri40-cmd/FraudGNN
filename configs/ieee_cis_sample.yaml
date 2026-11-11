@@ -1,0 +1,105 @@
+# ============================================================
+# IEEE-CIS — chạy mẫu 10% (KHÔNG phải kết quả paper)
+# [PAPER]    = paper nêu rõ  | [INFERRED] = paper không nêu, chọn tối ưu cho model
+# [DEVIATION]= cap kỹ thuật/khác paper (được ghi vào kết quả `deviations_from_paper`)
+# ============================================================
+seed: 42
+flags:
+  gnn: true
+  rl: true
+  federated: true
+  hard_edges: true
+  soft_edges: false
+  pruning: false
+experiment:
+  name: ieee_cis_sample
+  dataset: ieee
+  pipeline: fraudgnn_rl
+runtime:
+  device: auto
+output:
+  dir: outputs
+graph:
+  time_window_hours: 1.0
+  similarity_threshold: 0.9
+  max_neighbors_per_node: 32
+  device: null
+  chunk_elems: 20000000.0
+model:
+  hidden_dim: 64
+  num_layers: 3
+  dropout: 0.2
+  shared_projection: true
+  temporal_max_seq_len: 32
+train:
+  epochs: 5
+  patience: 3
+  batch_size: 64
+  learning_rate: 0.001
+  weight_decay: 0.0
+  pos_weight_max: 100.0
+  batch_mode: subgraph
+  subgraph_nodes: 5000
+  grad_steps_per_epoch: 1
+  eval_chunk_nodes: 200000
+rl:
+  type: naf
+  hidden_dim: 128
+  learning_rate: 0.001
+  epochs: 5
+  env_batch_size: 1024
+  update_batch_size: 64
+  gamma: 0.99
+  tau: 0.005
+  buffer_size: 10000
+  fpr_penalty: 1.0
+  recall_weight: 0.25
+  inference: mean
+  n_threshold_bins: 19
+federated:
+  num_clients: 3
+  rounds: 5
+  local_epochs: 1
+  client_fraction: 1.0
+  learning_rate: 0.001
+  patience: 3
+soft_graph:
+  enabled: true
+  similarity_threshold: 0.85
+  max_neighbors_per_node: 5
+  time_window_hours: 1.0
+  causal: true
+  feature_indices: null
+pruning:
+  start_epoch: 5
+  end_epoch: 25
+  initial_amount: 0.1
+  final_amount: 0.3
+dataset:
+  name: IEEE-CIS
+  transaction_path: data/raw/train_transaction.csv
+  identity_path: data/raw/train_identity.csv
+  key_col: TransactionID
+  label_col: isFraud
+  time_col: TransactionDT
+  time_unit: second
+  sample_frac: 0.1
+  random_state: 42
+  entity_type_col: ProductCD
+  entity_type_values:
+  - W
+  - C
+  - H
+  - R
+  - S
+split:
+  strategy: temporal
+  train_ratio: 0.64
+  val_ratio: 0.16
+preprocess:
+  numeric_strategy: mean
+  categorical_strategy: most_frequent
+  drop_cols:
+  - TransactionID
+  categorical_cols: []
+  onehot_min_frequency: null

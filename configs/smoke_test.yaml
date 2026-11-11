@@ -1,0 +1,93 @@
+# ============================================================
+# SMOKE TEST BASELINE (PaySim 5%) — FraudGNN-RL gốc
+# ============================================================
+seed: 42
+flags:
+  gnn: true
+  rl: true
+  federated: true
+  hard_edges: true
+  soft_edges: false
+  pruning: false
+experiment:
+  name: smoke_test_baseline
+  dataset: paysim
+  pipeline: fraudgnn_rl
+runtime:
+  device: auto
+output:
+  dir: outputs
+graph:
+  time_window_hours: 1.0
+  similarity_threshold: 0.9
+  max_neighbors_per_node: 32
+  device: null
+  chunk_elems: 20000000.0
+model:
+  hidden_dim: 64
+  num_layers: 3
+  dropout: 0.2
+  shared_projection: true
+  temporal_max_seq_len: 32
+train:
+  epochs: 20                # ← Tăng từ 10 lên 20
+  patience: 3
+  batch_size: 64
+  learning_rate: 0.001
+  weight_decay: 0.0
+  pos_weight_max: 1000.0    # ← Giảm từ 2000 xuống 1000
+  batch_mode: subgraph
+  subgraph_nodes: 2000
+  grad_steps_per_epoch: 1
+  eval_chunk_nodes: 200000
+rl:
+  type: naf
+  hidden_dim: 128
+  learning_rate: 0.001
+  epochs: 20
+  env_batch_size: 512
+  update_batch_size: 64
+  gamma: 0.99
+  tau: 0.005
+  buffer_size: 10000
+  fpr_penalty: 1.0
+  recall_weight: 0.25
+  inference: grid
+  n_threshold_bins: 19
+federated:
+  num_clients: 3
+  rounds: 2
+  local_epochs: 1
+  client_fraction: 1.0
+  learning_rate: 0.001
+  patience: 3
+soft_graph:
+  enabled: false
+dataset:
+  name: PaySim
+  path: data/raw/paysim_fast.csv
+  label_col: isFraud
+  time_col: step
+  time_unit: hour
+  sample_frac: 0.05
+  random_state: 42
+  entity_type_col: type
+  entity_type_values:
+  - CASH_IN
+  - CASH_OUT
+  - DEBIT
+  - PAYMENT
+  - TRANSFER
+split:
+  strategy: temporal
+  train_ratio: 0.64
+  val_ratio: 0.16
+preprocess:
+  numeric_strategy: mean
+  categorical_strategy: most_frequent
+  drop_cols:
+  - isFlaggedFraud
+  - nameOrig
+  - nameDest
+  categorical_cols:
+  - type

@@ -1,0 +1,15 @@
+LUỒNG XỬ LÝ (khớp Fig. 1 & Fig. 2 của paper)
+
+raw CSV (data/raw/)
+  -> src/data/load_data.py       (IEEE-CIS: left-merge transaction + identity)
+  -> src/data/split.py           (temporal 64/16/20 | stratified cho CC2023)
+  -> src/data/preprocess.py      (mean/mode impute, min-max, one-hot, hour/dow/delta_t; fit trên train)
+  -> src/graph/build_graph.py    (node = transaction; |dt|<=1h & cos>=0.9)   [soft edges: extension]
+  -> src/models/tssgc.py         (3 lớp TSSGC: Temporal GRU + Spatial GAT + Semantic)
+  -> src/models/classifier.py
+  -> src/train/federated.py      (FedAvg trung bình đều)  | src/train/train_gnn.py (w/o FL)
+  -> src/train/train_rl.py       (NAF/DQN trên VAL: state=embedding, action=threshold+feature weights)
+  -> src/train/pipeline_fraudgnn.py (áp policy lên TEST, không feedback online)
+  -> src/eval/metrics.py         (AUC-ROC, AUC-PR, F1, Recall@1%)
+Robustness: src/eval/adversarial.py, src/eval/concept_drift.py
+Ablation/so sánh: scripts/run/*.py, scripts/eval/*.py
